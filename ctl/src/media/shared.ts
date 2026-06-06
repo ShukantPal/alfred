@@ -3,6 +3,7 @@ export type MediaCommand =
   | { type: "audio_level"; level: number }
   | { type: "speak_stream_start"; id: string; text: string; sampleRate: number }
   | { type: "speak_stream_end"; id: string }
+  | { type: "speak_stream_clear" }
   | { type: "speak_stream_error"; id: string; message: string };
 
 interface ActiveAudioStream {
@@ -18,6 +19,7 @@ interface MediaSocketHandlers {
 
 let audioContext: AudioContext | undefined;
 let activeStream: ActiveAudioStream | undefined;
+let scheduledSources: AudioBufferSourceNode[] = [];
 
 export function connectMediaSocket(handlers: MediaSocketHandlers): WebSocket {
   const protocol = location.protocol === "https:" ? "wss" : "ws";
@@ -48,6 +50,9 @@ export function connectMediaSocket(handlers: MediaSocketHandlers): WebSocket {
       }
       if (payload.type === "speak_stream_end") {
         endAudioStream(payload.id, handlers.onStatus);
+      }
+      if (payload.type === "speak_stream_clear") {
+        clearAudioStream(handlers.onStatus);
       }
       if (payload.type === "speak_stream_error") {
         endAudioStream(payload.id, handlers.onStatus);
@@ -105,14 +110,32 @@ async function handleStreamAudio(buffer: ArrayBuffer): Promise<void> {
   const source = audioContext.createBufferSource();
   source.buffer = audioBuffer;
   source.connect(audioContext.destination);
+  scheduledSources.push(source);
+  source.addEventListener("ended", () => {
+    scheduledSources = scheduledSources.filter(item => item !== source);
+  });
 
   const startAt = Math.max(activeStream.nextPlaybackTime, audioContext.currentTime + 0.02);
   source.start(startAt);
   activeStream.nextPlaybackTime = startAt + audioBuffer.duration;
 }
 
+function clearAudioStream(onStatus: (message: string) => void): void {
+  for (const source of scheduledSources) {
+    try {
+      source.stop();
+    } catch {
+      // Source may have already ended.
+    }
+  }
+  scheduledSources = [];
+  activeStream = undefined;
+  onStatus("listening");
+}
+
 function endAudioStream(id: string, onStatus: (message: string) => void): void {
   if (!activeStream || activeStream.id !== id) return;
+  appendSilenceTail(180);
   const remainingMs = audioContext
     ? Math.max(0, (activeStream.nextPlaybackTime - audioContext.currentTime) * 1000)
     : 0;
@@ -122,6 +145,26 @@ function endAudioStream(id: string, onStatus: (message: string) => void): void {
       onStatus("listening");
     }
   }, remainingMs + 100);
+}
+
+function appendSilenceTail(durationMs: number): void {
+  if (!activeStream || !audioContext) return;
+
+  const frameCount = Math.ceil((activeStream.sampleRate * durationMs) / 1000);
+  if (frameCount <= 0) return;
+
+  const audioBuffer = audioContext.createBuffer(1, frameCount, activeStream.sampleRate);
+  const source = audioContext.createBufferSource();
+  source.buffer = audioBuffer;
+  source.connect(audioContext.destination);
+  scheduledSources.push(source);
+  source.addEventListener("ended", () => {
+    scheduledSources = scheduledSources.filter(item => item !== source);
+  });
+
+  const startAt = Math.max(activeStream.nextPlaybackTime, audioContext.currentTime + 0.02);
+  source.start(startAt);
+  activeStream.nextPlaybackTime = startAt + audioBuffer.duration;
 }
 
 function createBaseStyle(): HTMLStyleElement {

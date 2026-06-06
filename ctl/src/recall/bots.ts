@@ -7,12 +7,37 @@ export interface BuildCreateBotPayloadOptions {
   publicBaseUrl: string;
   realtimeDelivery: RealtimeDelivery;
   outputMediaMode: OutputMediaMode;
-  enableDeepgramStt: boolean;
+  enableRawAudio: boolean;
+  enableTranscriptEvents: boolean;
   /** Overrides the screenshare webpage URL (e.g. the agui surface). */
   screenshareUrl?: string;
 }
 
 export function buildCreateBotPayload(options: BuildCreateBotPayloadOptions): object {
+  const recordingConfig: Record<string, unknown> = {
+    realtime_endpoints: buildRealtimeEndpoints(
+      options.publicBaseUrl,
+      options.realtimeDelivery,
+      options.enableTranscriptEvents,
+      options.enableRawAudio,
+    ),
+  };
+
+  if (options.enableTranscriptEvents) {
+    recordingConfig.transcript = {
+      provider: {
+        recallai_streaming: {
+          mode: "prioritize_low_latency",
+          language_code: "en",
+        },
+      },
+    };
+  }
+
+  if (options.enableRawAudio) {
+    recordingConfig.audio_mixed_raw = {};
+  }
+
   const payload: Record<string, unknown> = {
     meeting_url: options.meetingUrl,
     bot_name: options.botName,
@@ -27,26 +52,8 @@ export function buildCreateBotPayload(options: BuildCreateBotPayloadOptions): ob
       created_by: "alfred-ctl-demo",
       created_at: new Date().toISOString(),
     },
-    recording_config: {
-      transcript: {
-        provider: {
-          recallai_streaming: {
-            mode: "prioritize_low_latency",
-            language_code: "en",
-          },
-        },
-      },
-      realtime_endpoints: buildRealtimeEndpoints(
-        options.publicBaseUrl,
-        options.realtimeDelivery,
-        options.enableDeepgramStt,
-      ),
-    },
+    recording_config: recordingConfig,
   };
-
-  if (options.enableDeepgramStt) {
-    (payload.recording_config as Record<string, unknown>).audio_mixed_raw = {};
-  }
 
   const outputMedia = buildOutputMedia(
     options.publicBaseUrl,
@@ -72,7 +79,8 @@ export function buildWebpageScreenshareOutputMedia(url: string): object {
 function buildRealtimeEndpoints(
   publicBaseUrl: string,
   delivery: RealtimeDelivery,
-  enableDeepgramStt: boolean,
+  enableTranscriptEvents: boolean,
+  enableRawAudio: boolean,
 ): object[] {
   const transcriptAndParticipantEvents = [
     "transcript.data",
@@ -86,7 +94,7 @@ function buildRealtimeEndpoints(
 
   const endpoints: object[] = [];
 
-  if (delivery === "webhook" || delivery === "both") {
+  if (enableTranscriptEvents && (delivery === "webhook" || delivery === "both")) {
     endpoints.push({
       type: "webhook",
       url: `${publicBaseUrl}/webhooks/recall`,
@@ -95,10 +103,10 @@ function buildRealtimeEndpoints(
   }
 
   const websocketEvents = [
-    ...(delivery === "websocket" || delivery === "both"
+    ...(enableTranscriptEvents && (delivery === "websocket" || delivery === "both")
       ? transcriptAndParticipantEvents
       : []),
-    ...(enableDeepgramStt ? ["audio_mixed_raw.data"] : []),
+    ...(enableRawAudio ? ["audio_mixed_raw.data"] : []),
   ];
 
   if (websocketEvents.length > 0) {

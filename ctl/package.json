@@ -2,7 +2,7 @@
   "name": "@alfred/ctl",
   "version": "0.1.0",
   "private": true,
-  "description": "Alfred meeting control plane: Recall.ai bot, media pages, STT, TTS, and ctl-to-agent bridge.",
+  "description": "Alfred meeting control plane: Recall.ai bot, media pages, OpenAI Realtime voice, and ctl-to-agent bridge.",
   "type": "module",
   "scripts": {
     "check": "tsc --noEmit -p tsconfig.json",
