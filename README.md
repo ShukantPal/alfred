@@ -59,8 +59,6 @@ bun run demo:stop-tunnels
 - `ALFRED_STT_PROVIDER`: `deepgram` or `recall`; defaults to `deepgram` when `DEEPGRAM_API_KEY` is set, otherwise `recall`.
 - `DEEPGRAM_API_KEY`: enables Deepgram REST TTS for Alfred speech output.
 - `DEEPGRAM_TTS_MODEL`: Deepgram Aura voice model, default `aura-2-draco-en`.
-- `DEEPGRAM_TTS_ENCODING`: Deepgram TTS encoding, default `linear16`.
-- `DEEPGRAM_TTS_CONTAINER`: Deepgram TTS container, default `wav`.
 - `DEEPGRAM_TTS_SAMPLE_RATE`: Deepgram TTS sample rate, default `24000`.
 - `DEEPGRAM_TTS_TIMEOUT_MS`: Deepgram TTS request timeout, default `10000`.
 - `DEEPGRAM_STT_MODEL`: Deepgram live STT model, default `nova-3`.
@@ -75,7 +73,6 @@ bun run demo:stop-tunnels
 - `GET /media/camera`
 - `GET /media/screen`
 - `GET /media/app.js`
-- `GET /tts?text=Hello.%20I'm%20Alfred%20and%20I'm%20ready%20to%20help!`
 
 `/media/camera` serves `ctl/src/media/camera.html`, and `/media/screen` serves
 `ctl/src/media/screen.html`. The UI and audio player are implemented in
@@ -98,15 +95,14 @@ default. Set `ALFRED_REALTIME_DELIVERY=websocket` or `both` to have Recall
 connect to `/ws/recall` as well.
 
 If Alfred hears `hello alfred`, the ctl server sends a speech command to the
-Output Media webpage. The webpage plays
-`/tts?text=Hello.%20I'm%20Alfred%20and%20I'm%20ready%20to%20help!`, which uses
-Deepgram REST TTS when `DEEPGRAM_API_KEY` is set. If Deepgram is not configured
-or the request fails for the demo greeting, ctl falls back to `/audio/hello.wav`.
-Deepgram output is requested as uncompressed WAV and padded with short
-leading/trailing silence to reduce capture artifacts in Recall Output Media.
-The media page fetches the generated audio into a blob and waits until the
-browser can play through it before starting playback; this avoids clipping that
-can happen when assigning a streaming URL directly to an audio element.
+Output Media webpage. When `DEEPGRAM_API_KEY` is set, ctl opens Deepgram's
+streaming Speak websocket, sends the response text, and forwards raw PCM chunks
+to `/ws/media`. The media page schedules those chunks with Web Audio so playback
+can begin before the full utterance is generated.
+
+There is no REST TTS output route. Alfred's spoken responses use Deepgram's
+streaming Speak websocket and are forwarded to the media page over `/ws/media`
+as raw PCM chunks.
 
 Raw audio websocket payloads are not logged. ctl logs only the realtime event
 name and decoded byte count for `audio_mixed_raw.data`.
