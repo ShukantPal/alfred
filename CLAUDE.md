@@ -156,7 +156,9 @@ The data flow, end to end:
    `start_screenshare` hits Recall's runtime Output Media endpoint.
 
 5. **`ctl/src/media/`** — fallback camera/screen pages when agui is unavailable.
-   Audio output stays on the camera page; the screen page is static.
+   `camera.html`/`camera.ts` and `screen.html`/`screen.ts`; `shared.ts` holds the
+   `/ws/media` client + Web Audio playback. Audio output stays on the camera page;
+   the screen page is static.
 
 6. **`ctl/src/recall/`** — Recall.ai API glue. Screenshare renders the agui
    `/screenshare` URL when available, otherwise `ctl`'s `/media/screen`.
@@ -168,6 +170,7 @@ The data flow, end to end:
 - `ALFRED_REALTIME_DELIVERY` (`webhook`|`websocket`|`both`)
 - `ALFRED_OUTPUT_MEDIA` (`camera`|`screenshare`|`none`): join-time default; runtime
   "start screenshare" can switch later regardless.
+- `ALFRED_PUBLIC_BASE_URL`: skip Cloudflare and use an existing public HTTPS URL.
 - `ALFRED_AGUI_SCREENSHARE` (default `true`): use agui for screenshare; `false` →
   `/media/screen`.
 - `ALFRED_AGUI_DIR`, `ALFRED_AGUI_PORT`, `ALFRED_AGUI_SCREENSHARE_PATH`,
@@ -176,8 +179,10 @@ The data flow, end to end:
 
 ### Conventions
 
-- Runtime is **Bun** for ctl/agent; agui is npm + Next.js.
+- Runtime is **Bun** for ctl/agent; agui is npm + Next.js. TS is ESM, `strict`,
+  `moduleResolution: Bundler`, targeting ES2022 with DOM libs in ctl.
 - Defensive parsing of external payloads (Recall/Deepgram shapes vary).
 - Raw PCM is never logged — only event name + byte counts.
 - Cloudflare tunnels are **persistent** in `.tools/alfred-tunnels.json`; stop with
-  `bun run demo:stop-tunnels`.
+  `bun run demo:stop-tunnels`. `cloudflared` is resolved from `CLOUDFLARED_BIN`,
+  then `./.tools/cloudflared`, then `../Take3/.tools/cloudflared`.
