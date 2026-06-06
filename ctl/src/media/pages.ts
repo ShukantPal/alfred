@@ -2,7 +2,8 @@ import { join } from "node:path";
 
 const cameraPagePath = join(process.cwd(), "ctl", "src", "media", "camera.html");
 const screenPagePath = join(process.cwd(), "ctl", "src", "media", "screen.html");
-const mediaAppPath = join(process.cwd(), "ctl", "src", "media", "app.ts");
+const cameraAppPath = join(process.cwd(), "ctl", "src", "media", "camera.ts");
+const screenAppPath = join(process.cwd(), "ctl", "src", "media", "screen.ts");
 
 export function cameraPage(): Response {
   return mediaShell(cameraPagePath);
@@ -12,9 +13,17 @@ export function screenPage(): Response {
   return mediaShell(screenPagePath);
 }
 
-export async function mediaAppBundle(): Promise<Response> {
+export async function cameraAppBundle(): Promise<Response> {
+  return bundleBrowserApp(cameraAppPath);
+}
+
+export async function screenAppBundle(): Promise<Response> {
+  return bundleBrowserApp(screenAppPath);
+}
+
+async function bundleBrowserApp(entrypoint: string): Promise<Response> {
   const result = await Bun.build({
-    entrypoints: [mediaAppPath],
+    entrypoints: [entrypoint],
     format: "esm",
     minify: process.env.NODE_ENV === "production",
     target: "browser",
