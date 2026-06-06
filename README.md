@@ -104,6 +104,11 @@ streaming Speak websocket, sends the response text, and forwards raw PCM chunks
 to `/ws/media`. The media page schedules those chunks with Web Audio so playback
 can begin before the full utterance is generated.
 
+If Alfred hears `start screenshare`, ctl calls Recall.ai's runtime Output Media
+endpoint for the active bot and starts `/media/screen` as a screenshare. The
+screen-share page is static and does not connect to `/ws/media` or play audio;
+audio output stays on the camera media page.
+
 There is no REST TTS output route. Alfred's spoken responses use Deepgram's
 streaming Speak websocket and are forwarded to the media page over `/ws/media`
 as raw PCM chunks.

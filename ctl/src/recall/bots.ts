@@ -54,6 +54,10 @@ export function buildCreateBotPayload(options: BuildCreateBotPayloadOptions): ob
   return payload;
 }
 
+export function buildScreenshareOutputMedia(publicBaseUrl: string): object {
+  return buildOutputMedia(publicBaseUrl, "screenshare") ?? {};
+}
+
 function buildRealtimeEndpoints(
   publicBaseUrl: string,
   delivery: RealtimeDelivery,

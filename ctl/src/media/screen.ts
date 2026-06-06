@@ -1,4 +1,4 @@
-import { connectMediaSocket, mountBaseStyles, requireElement } from "./shared";
+import { mountBaseStyles, requireElement } from "./shared";
 
 document.title = "Alfred Control Plane";
 mountBaseStyles();
@@ -6,13 +6,6 @@ document.head.appendChild(createScreenStyle());
 
 const root = requireElement("app");
 root.replaceChildren(renderScreenApp());
-
-const statusEl = requireElement("status");
-connectMediaSocket({
-  onStatus(message) {
-    statusEl.textContent = message;
-  },
-});
 
 function renderScreenApp(): HTMLElement {
   const fragment = document.createDocumentFragment();
@@ -30,16 +23,7 @@ function renderScreenApp(): HTMLElement {
 
   main.append(mark, heading, copy);
 
-  const status = document.createElement("div");
-  status.className = "status";
-  const pulse = document.createElement("span");
-  pulse.className = "pulse";
-  const statusText = document.createElement("span");
-  statusText.id = "status";
-  statusText.textContent = "connected";
-  status.append(pulse, statusText);
-
-  fragment.append(main, status);
+  fragment.append(main);
 
   const container = document.createElement("div");
   container.append(fragment);
@@ -89,17 +73,6 @@ function createScreenStyle(): HTMLStyleElement {
       color: rgba(246, 241, 232, 0.78);
       font-size: 30px;
       line-height: 1.25;
-    }
-
-    .status {
-      position: fixed;
-      left: 72px;
-      bottom: 56px;
-      display: flex;
-      align-items: center;
-      gap: 14px;
-      color: rgba(246, 241, 232, 0.72);
-      font-size: 22px;
     }
   `;
   return style;

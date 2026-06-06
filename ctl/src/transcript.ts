@@ -1,5 +1,5 @@
 export interface TranscriptCommand {
-  type: "status" | "say";
+  type: "status" | "say" | "start_screenshare";
   message?: string;
   text?: string;
 }
@@ -20,13 +20,20 @@ export function createTranscriptResponder(options: TranscriptResponderOptions) {
       options.broadcast({ type: "status", message: `heard: ${text}` });
 
       const normalized = normalizeText(text);
-      if (!normalized.includes("hello alfred")) return;
-      if (wasRecentlyHandled(recentResponses, "hello alfred")) return;
+      if (isStartScreenshareCommand(normalized)) {
+        if (wasRecentlyHandled(recentResponses, "start screenshare")) return;
+        options.broadcast({ type: "start_screenshare" });
+        return;
+      }
 
-      options.broadcast({
-        type: "say",
-        text: "Hello. I'm Alfred and I'm ready to help!",
-      });
+      if (normalized.includes("hello alfred")) {
+        if (wasRecentlyHandled(recentResponses, "hello alfred")) return;
+
+        options.broadcast({
+          type: "say",
+          text: "Hello. I'm Alfred and I'm ready to help!",
+        });
+      }
     },
   };
 }
@@ -144,6 +151,13 @@ function normalizeText(text: string): string {
     .replace(/[^a-z0-9]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function isStartScreenshareCommand(normalizedText: string): boolean {
+  return (
+    normalizedText.includes("start screenshare") ||
+    normalizedText.includes("start screen share")
+  );
 }
 
 function wasRecentlyHandled(recentResponses: Map<string, number>, phrase: string): boolean {
