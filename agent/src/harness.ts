@@ -1,80 +1,106 @@
 import type OpenAI from "openai";
-import * as weave from "weave";
 import { Memory } from "./memory.js";
 import type { OutboundFrame } from "./protocol.js";
 import { makeClient, FAST_MODEL, SMART_MODEL } from "./llm.js";
+import { createPlanner } from "./planner.js";
+import { createSubagent } from "./subagent.js";
+import { createSynthesizer } from "./synthesizer.js";
+import type { Finding, SubagentTask } from "./harness-types.js";
 
 /**
- * The harness (board: "Live running, interactive agent that delegates to subagents",
- * "this layer owns the memory + harness").
+ * The harness (board: "Live running, interactive agent that delegates to subagents").
  *
- * Shape: an Orchestrator decides which subagents to consult, runs the relevant ones,
- * then a Synthesizer streams the spoken answer. Each node is a Weave op, so the trace
- * renders as the delegation tree ctl/ can also show live via agentTrace frames. The LLM
- * calls themselves are traced too (the client is wrapped with weave.wrapOpenAI in llm.ts),
- * so each chat.completions span nests under its owning node.
+ * Flow per addressed utterance:
+ *   retrieve candidates -> planner picks docs -> fan out subagents IN PARALLEL -> synthesize
+ *   a streamed, grounded answer. Optionally emits agentAction{presentUrl} when present-mode is on.
  *
- * `emit` is how the harness pushes Outbound frames back to ctl/ (streaming text + traces).
+ * Every stage is a weave.op (so the Weave trace renders as the delegation tree) and emits a
+ * matching agentTrace frame so ctl/ can mirror the tree live.
  */
 
 type Emit = (frame: OutboundFrame) => void;
 
-export class Harness {
-  private client: OpenAI;
+export interface HarnessOptions {
+  /** When true, also emit agentAction{presentUrl} for the planner's chosen doc. */
+  presentMode?: boolean;
+  /** Max subagents running concurrently (keeps latency + API load sane). */
+  maxConcurrency?: number;
+  /** How many candidate docs to retrieve for the planner catalog. */
+  candidateCount?: number;
+  /** Injectable for tests; defaults to the configured W&B/OpenAI client. */
+  client?: OpenAI;
+  fastModel?: string;
+  smartModel?: string;
+}
 
-  constructor(private memory: Memory) {
-    this.client = makeClient();
+export class Harness {
+  private presentMode: boolean;
+  private maxConcurrency: number;
+  private candidateCount: number;
+  private planner: ReturnType<typeof createPlanner>;
+  private subagent: ReturnType<typeof createSubagent>;
+  private synthesizer: ReturnType<typeof createSynthesizer>;
+
+  constructor(private memory: Memory, options: HarnessOptions = {}) {
+    const client: OpenAI = options.client ?? makeClient();
+    const fastModel = options.fastModel ?? FAST_MODEL;
+    const smartModel = options.smartModel ?? SMART_MODEL;
+    this.presentMode = options.presentMode ?? false;
+    this.maxConcurrency = options.maxConcurrency ?? 5;
+    this.candidateCount = options.candidateCount ?? 8;
+    this.planner = createPlanner({ client, model: fastModel });
+    this.subagent = createSubagent({ client, model: fastModel });
+    this.synthesizer = createSynthesizer({ client, model: smartModel });
   }
 
-  /**
-   * Handle one addressed utterance. Streams the answer out via `emit`.
-   * correlationId/meetingId thread through so ctl/ can match the stream.
-   */
   async handle(opts: {
     correlationId: string;
     meetingId: string;
     speaker: string;
     text: string;
     emit: Emit;
-  }) {
+  }): Promise<void> {
     const { correlationId, meetingId, speaker, text, emit } = opts;
     const trace = (node: string, event: "start" | "finish", detail?: string) =>
       emit({ type: "agentTrace", correlationId, meetingId, node, event, detail });
 
     try {
-      // 1) Orchestrator: decide what to consult.
-      trace("orchestrator", "start");
-      const plan = await this.orchestrate(text);
-      trace("orchestrator", "finish", `consult: ${plan.consult.join(", ") || "none"}`);
-
-      // 2) Subagents run for whatever the orchestrator asked for.
-      const findings: string[] = [];
       const history = await this.memory.recentTurns(meetingId, 10);
 
-      if (plan.consult.includes("memory") || plan.consult.includes("docs")) {
-        trace("docs", "start");
-        const chunks = await this.memory.retrieve(text, 4);
-        trace("docs", "finish", `${chunks.length} chunks`);
-        if (chunks.length) {
-          findings.push(
-            "Relevant company context:\n" +
-              chunks
-                .map((c) => `- [${c.doc.source}] ${c.doc.title} (owner: ${c.doc.owner}): ${c.doc.text}`)
-                .join("\n")
-          );
+      // 1) Retrieve candidate docs for the planner's catalog.
+      trace("retrieve", "start");
+      const candidates = await this.memory.retrieve(text, this.candidateCount);
+      trace("retrieve", "finish", `${candidates.length} candidates`);
+
+      // 2) Plan: which docs to fan out on (+ optional present doc).
+      trace("planner", "start");
+      const built = await this.planner(
+        text,
+        candidates.map(c => c.doc),
+        { presentMode: this.presentMode },
+      );
+      trace("planner", "finish", `${built.tasks.length} subagents${built.present ? ` · present ${built.present.docId}` : ""}`);
+
+      // 3) Fan out subagents in parallel (concurrency-capped).
+      const findings = await this.fanOut(text, built.tasks, trace);
+
+      // 4) Optionally present the chosen doc (before/while speaking).
+      if (this.presentMode && built.present) {
+        const doc = candidates.find(c => c.doc.id === built.present!.docId)?.doc;
+        if (doc?.url) {
+          emit({
+            type: "agentAction",
+            correlationId,
+            meetingId,
+            action: { kind: "presentUrl", url: doc.url, title: doc.title },
+            requiresConfirmation: true,
+          });
         }
       }
 
-      if (plan.consult.includes("people")) {
-        trace("people", "start");
-        const note = await this.peopleSubagent(text);
-        trace("people", "finish");
-        if (note) findings.push(note);
-      }
-
-      // 3) Synthesizer: stream the spoken answer.
+      // 5) Synthesize the streamed answer.
       trace("synth", "start");
-      await this.synthesize({
+      await this.synthesizer({
         correlationId,
         meetingId,
         speaker,
@@ -94,82 +120,32 @@ export class Harness {
     }
   }
 
-  /** Orchestrator: a fast routing call that returns which subagents to run. */
-  private orchestrate = weave.op(async (text: string): Promise<{ consult: string[] }> => {
-    const res = await this.client.chat.completions.create({
-      model: FAST_MODEL,
-      max_tokens: 200,
-      messages: [
-        {
-          role: "system",
-          content:
-            "You route a meeting assistant's work. Given the latest utterance, reply with ONLY " +
-            'a JSON object: {"consult": [...]} where items are any of "docs" (company files/projects), ' +
-            '"people" (who owns/knows something, who is absent), "memory" (recall earlier in meeting). ' +
-            "No prose, no backticks.",
-        },
-        { role: "user", content: text },
-      ],
-    });
-    const raw = res.choices[0]?.message?.content ?? "{}";
-    try {
-      const parsed = JSON.parse(raw.replace(/```json|```/g, "").trim());
-      return { consult: Array.isArray(parsed.consult) ? parsed.consult : ["docs"] };
-    } catch {
-      return { consult: ["docs"] };
-    }
-  });
+  /** Run subagent tasks in parallel with a concurrency cap; failed tasks are dropped. */
+  private async fanOut(
+    question: string,
+    tasks: SubagentTask[],
+    trace: (node: string, event: "start" | "finish", detail?: string) => void,
+  ): Promise<Finding[]> {
+    const findings: Finding[] = [];
+    let cursor = 0;
 
-  /** People subagent: reasons about ownership/availability from retrieved context. */
-  private peopleSubagent = weave.op(async (text: string): Promise<string> => {
-    const chunks = await this.memory.retrieve(text, 4);
-    if (!chunks.length) return "";
-    const owners = [...new Set(chunks.map((c) => c.doc.owner))];
-    return `Document/project owners relevant here: ${owners.join(", ")}. ` +
-      `If the asker needs someone who is unavailable, surface the owning document's content directly.`;
-  });
-
-  /** Synthesizer: streams tokens out as agentMessage frames. */
-  private synthesize = weave.op(
-    async (opts: {
-      correlationId: string;
-      meetingId: string;
-      speaker: string;
-      question: string;
-      findings: string[];
-      history: { speaker: string; text: string }[];
-      emit: Emit;
-    }) => {
-      const { correlationId, meetingId, speaker, question, findings, history, emit } = opts;
-      const sys =
-        "You are a meeting assistant speaking aloud in a live meeting. You hold company-wide " +
-        "context. Answer the addressed person directly and concisely (2-4 sentences, spoken style). " +
-        "Ground every claim in the provided context; if context is missing, say so plainly rather " +
-        "than guessing. When the person needs a colleague who is unavailable, answer from that " +
-        "colleague's documents instead of deferring.";
-      const ctx =
-        (history.length
-          ? `Recent meeting turns:\n${history.map((h) => `${h.speaker}: ${h.text}`).join("\n")}\n\n`
-          : "") +
-        (findings.length ? `${findings.join("\n\n")}\n\n` : "Context: (none retrieved)\n\n");
-
-      const stream = await this.client.chat.completions.create({
-        model: SMART_MODEL,
-        max_tokens: 400,
-        stream: true,
-        messages: [
-          { role: "system", content: sys },
-          { role: "user", content: `${ctx}${speaker} asks: ${question}` },
-        ],
-      });
-
-      for await (const chunk of stream) {
-        const delta = chunk.choices[0]?.delta?.content;
-        if (delta) {
-          emit({ type: "agentMessage", correlationId, meetingId, delta, done: false });
+    const worker = async () => {
+      while (cursor < tasks.length) {
+        const task = tasks[cursor++]!;
+        const node = `subagent:${task.doc.id}`;
+        trace(node, "start", task.focus || undefined);
+        try {
+          const finding = await this.subagent(question, task);
+          findings.push(finding);
+          trace(node, "finish", finding.summary ? "found" : "nothing relevant");
+        } catch {
+          trace(node, "finish", "error");
         }
       }
-      emit({ type: "agentMessage", correlationId, meetingId, delta: "", done: true });
-    }
-  );
+    };
+
+    const lanes = Math.min(this.maxConcurrency, Math.max(1, tasks.length));
+    await Promise.all(Array.from({ length: lanes }, () => worker()));
+    return findings;
+  }
 }

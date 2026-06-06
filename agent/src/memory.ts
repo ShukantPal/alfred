@@ -19,6 +19,8 @@ export interface ContextDoc {
   title: string;
   owner: string; // who it belongs to — lets us answer "X is on holiday" questions
   text: string;
+  /** Link to present on screen (agentAction.presentUrl). Optional; real Drive supplies real URLs. */
+  url?: string;
 }
 
 export interface RetrievedChunk {
@@ -60,7 +62,13 @@ export class Memory {
   async seedContext(docs: ContextDoc[]) {
     if (this.fallback) {
       for (const d of docs) {
-        this.memCtx.set(d.id, { source: d.source, title: d.title, owner: d.owner, text: d.text });
+        this.memCtx.set(d.id, {
+          source: d.source,
+          title: d.title,
+          owner: d.owner,
+          text: d.text,
+          url: d.url ?? "",
+        });
         this.memCtxIds.add(d.id);
       }
       return;
@@ -72,6 +80,7 @@ export class Memory {
         title: d.title,
         owner: d.owner,
         text: d.text,
+        url: d.url ?? "",
       });
       pipe.sadd("ctx:ids", d.id);
     }
@@ -98,6 +107,7 @@ export class Memory {
             title: h.title,
             owner: h.owner,
             text: h.text,
+            url: h.url || undefined,
           },
           score,
         });
