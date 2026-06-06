@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 export type RealtimeDelivery = "webhook" | "websocket" | "both";
 export type OutputMediaMode = "camera" | "screenshare" | "none";
-export type SttProvider = "recall" | "deepgram";
+export type VoiceProvider = "openai-realtime";
 
 export interface DemoConfig {
   meetingUrl: string;
@@ -21,12 +21,12 @@ export interface DemoConfig {
   shutdownTimeoutMs: number;
   realtimeDelivery: RealtimeDelivery;
   outputMediaMode: OutputMediaMode;
-  sttProvider: SttProvider;
   aguiScreenshare: boolean;
   aguiDir: string;
   aguiPort: number;
   aguiPublicBaseUrl?: string;
   aguiScreensharePath: string;
+  voiceProvider: VoiceProvider;
 }
 
 export function readDemoConfig(argv: string[], env: NodeJS.ProcessEnv): DemoConfig {
@@ -59,12 +59,12 @@ export function readDemoConfig(argv: string[], env: NodeJS.ProcessEnv): DemoConf
     shutdownTimeoutMs: readInteger(env.ALFRED_SHUTDOWN_TIMEOUT_MS, 10_000),
     realtimeDelivery: readRealtimeDelivery(env.ALFRED_REALTIME_DELIVERY),
     outputMediaMode: readOutputMediaMode(env.ALFRED_OUTPUT_MEDIA),
-    sttProvider: readSttProvider(env),
     aguiScreenshare: readBoolean(env.ALFRED_AGUI_SCREENSHARE, true),
     aguiDir: env.ALFRED_AGUI_DIR ?? join(process.cwd(), "agui"),
     aguiPort: readInteger(env.ALFRED_AGUI_PORT, 3000),
     aguiPublicBaseUrl: normalizeBaseUrl(env.ALFRED_AGUI_PUBLIC_BASE_URL),
     aguiScreensharePath: env.ALFRED_AGUI_SCREENSHARE_PATH ?? "/screenshare",
+    voiceProvider: readVoiceProvider(env),
   };
 }
 
@@ -104,8 +104,9 @@ function readOutputMediaMode(value: string | undefined): OutputMediaMode {
   return "camera";
 }
 
-function readSttProvider(env: NodeJS.ProcessEnv): SttProvider {
-  if (env.ALFRED_STT_PROVIDER === "recall") return "recall";
-  if (env.ALFRED_STT_PROVIDER === "deepgram") return "deepgram";
-  return env.DEEPGRAM_API_KEY ? "deepgram" : "recall";
+function readVoiceProvider(env: NodeJS.ProcessEnv): VoiceProvider {
+  if (env.ALFRED_VOICE_PROVIDER && env.ALFRED_VOICE_PROVIDER !== "openai-realtime") {
+    console.warn("[ctl] ALFRED_VOICE_PROVIDER is ignored; ctl only supports openai-realtime");
+  }
+  return "openai-realtime";
 }

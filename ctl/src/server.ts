@@ -1,9 +1,8 @@
 import type { Server, ServerWebSocket } from "bun";
 import { createAgentClient } from "./agent/client";
+import { extractRecallMixedAudio } from "./recall/audio";
+import { createOpenAIRealtimeVoiceFromEnv } from "./realtime/openai";
 import { createRouter } from "./routes";
-import { createDeepgramSttFromEnv, extractRecallMixedAudio } from "./stt/deepgram";
-import { createTranscriptResponder } from "./transcript";
-import { createDeepgramTtsFromEnv } from "./tts/deepgram";
 
 export interface CtlServer {
   localBaseUrl: string;
@@ -23,11 +22,11 @@ interface WebSocketData {
 type MediaSocket = ServerWebSocket<WebSocketData>;
 type MediaCommand =
   | { type: "status"; message?: string }
-  | { type: "say"; text?: string }
   | { type: "start_screenshare" }
   | { type: "audio_level"; level: number }
   | { type: "speak_stream_start"; id: string; text: string; sampleRate: number }
   | { type: "speak_stream_end"; id: string }
+  | { type: "speak_stream_clear" }
   | { type: "speak_stream_error"; id: string; message: string };
 
 export function startCtlServer(
@@ -37,40 +36,57 @@ export function startCtlServer(
 ): CtlServer {
   const sockets = new Set<ServerWebSocket<WebSocketData>>();
   const audioLog = createAudioChunkLogger(30_000);
-  const tts = createDeepgramTtsFromEnv(process.env);
-  const speechStreamer = createSpeechStreamer({
-    tts,
-    getMediaSockets: () => [...sockets].filter(socket => socket.data.path === "/ws/media"),
-  });
   const broadcast = (message: MediaCommand) => {
-    if (message.type === "say" && message.text) {
-      speechStreamer.enqueue(message.text);
-      return;
-    }
     if (message.type === "start_screenshare") {
       options.onStartScreenshare?.();
       return;
     }
     sendMediaJson(sockets, message);
   };
-  // Bridge to the agent/ harness: addressed utterances are answered by the harness, streamed
-  // back, and spoken via TTS. Falls back to a greeting if the agent server is unreachable.
+  // Bridge to the agent/ harness for Realtime function-call subdelegation.
   const agentUrl = process.env.ALFRED_AGENT_URL ?? "ws://127.0.0.1:8787";
   const meetingId = process.env.ALFRED_MEETING_ID ?? `ctl-${crypto.randomUUID().slice(0, 8)}`;
   const agent = createAgentClient({ url: agentUrl, meetingId });
   console.log(`[ctl] agent bridge -> ${agentUrl} (meeting ${meetingId})`);
 
-  const transcripts = createTranscriptResponder({ broadcast, agent });
-  const stt = createDeepgramSttFromEnv(process.env, payload =>
-    transcripts.handle(payload, "deepgram"),
-  );
-  if (stt.enabled) {
-    console.log("[ctl] Deepgram realtime STT enabled");
+  const speaker = { id: "meeting", displayName: "Participant" };
+  const realtimeVoice = createOpenAIRealtimeVoiceFromEnv(process.env, {
+    agent,
+    speaker,
+    onStatus(message) {
+      sendMediaJson(sockets, { type: "status", message });
+    },
+    onAudioStart(id, sampleRate) {
+      sendMediaJson(sockets, {
+        type: "speak_stream_start",
+        id,
+        text: "",
+        sampleRate,
+      });
+    },
+    onAudio(audio) {
+      for (const socket of [...sockets].filter(socket => socket.data.path === "/ws/media")) {
+        socket.send(audio);
+      }
+    },
+    onAudioEnd(id) {
+      sendMediaJson(sockets, { type: "speak_stream_end", id });
+    },
+    onAudioClear() {
+      sendMediaJson(sockets, { type: "speak_stream_clear" });
+    },
+  });
+  if (realtimeVoice.enabled) {
+    console.log("[ctl] OpenAI Realtime voice enabled");
   } else {
-    console.log("[ctl] Deepgram realtime STT disabled");
+    console.warn("[ctl] OpenAI Realtime voice requested but OPENAI_API_KEY is not set");
   }
+
+  console.log("[ctl] OpenAI Realtime is the only ctl voice path");
   const router = createRouter({
-    onRecallWebhook: payload => transcripts.handle(payload, "webhook"),
+    onRecallWebhook() {
+      // Recall transcript webhooks are ignored; ctl voice is driven by OpenAI Realtime audio.
+    },
   });
 
   const server: Server<WebSocketData> = Bun.serve<WebSocketData>({
@@ -106,10 +122,11 @@ export function startCtlServer(
                 type: "audio_level",
                 level: calculatePcmLevel(audio),
               });
-              stt.sendPcm(audio);
+              if (realtimeVoice.enabled) {
+                realtimeVoice.sendPcm(audio);
+              }
             } else {
               console.log(`[ctl] websocket message /ws/recall ${summarizePayload(payload)}`);
-              transcripts.handle(payload, "websocket");
             }
           } else {
             console.log(`[ctl] websocket message /ws/recall ${stringifyMessage(message)}`);
@@ -132,94 +149,12 @@ export function startCtlServer(
       for (const socket of sockets) {
         socket.close();
       }
-      stt.close();
+      realtimeVoice.close();
       agent.close();
       server.stop(true);
     },
     broadcast,
   };
-}
-
-function createSpeechStreamer(options: {
-  tts: ReturnType<typeof createDeepgramTtsFromEnv>;
-  getMediaSockets(): MediaSocket[];
-}) {
-  const queue: string[] = [];
-  let isStreaming = false;
-
-  const drain = async () => {
-    if (isStreaming) return;
-    isStreaming = true;
-
-    try {
-      while (queue.length > 0) {
-        const text = queue.shift();
-        if (text) await streamSpeech(text, options);
-      }
-    } finally {
-      isStreaming = false;
-    }
-  };
-
-  return {
-    enqueue(text: string) {
-      const lastQueued = queue[queue.length - 1];
-      if (lastQueued === text) return;
-      queue.push(text);
-      void drain();
-    },
-  };
-}
-
-async function streamSpeech(
-  text: string,
-  options: {
-    tts: ReturnType<typeof createDeepgramTtsFromEnv>;
-    getMediaSockets(): MediaSocket[];
-  },
-): Promise<void> {
-  if (!options.tts.enabled) {
-    sendMediaJsonToSockets(options.getMediaSockets(), {
-      type: "status",
-      message: "Deepgram TTS unavailable",
-    });
-    return;
-  }
-
-  const id = crypto.randomUUID();
-  const sockets = options.getMediaSockets();
-  if (sockets.length === 0) return;
-
-  sendMediaJsonToSockets(sockets, {
-    type: "speak_stream_start",
-    id,
-    text,
-    sampleRate: options.tts.streamingSampleRate,
-  });
-
-  try {
-    console.log(`[ctl] streaming TTS start id=${id}`);
-    await options.tts.stream(text, {
-      onAudio(audio) {
-        for (const socket of options.getMediaSockets()) {
-          socket.send(audio.bytes);
-        }
-      },
-    });
-    sendMediaJsonToSockets(options.getMediaSockets(), { type: "speak_stream_end", id });
-    console.log(`[ctl] streaming TTS end id=${id}`);
-  } catch (error) {
-    console.error("[ctl] streaming TTS failed", error);
-    sendMediaJsonToSockets(options.getMediaSockets(), {
-      type: "speak_stream_error",
-      id,
-      message: "streaming TTS failed",
-    });
-    sendMediaJsonToSockets(options.getMediaSockets(), {
-      type: "status",
-      message: "audio failed",
-    });
-  }
 }
 
 function sendMediaJson(sockets: Set<MediaSocket>, message: MediaCommand): void {

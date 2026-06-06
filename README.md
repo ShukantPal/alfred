@@ -7,7 +7,7 @@ and uses Recall.ai to send a bot into a meeting.
 
 Alfred is a Bun workspace monorepo:
 
-- `ctl/`: meeting control plane, Recall.ai integration, media pages, STT/TTS.
+- `ctl/`: meeting control plane, Recall.ai integration, media pages, and OpenAI Realtime voice.
 - `agent/`: company memory and agent harness exposed over WebSocket.
 
 Use the root `bun.lock` as the only lockfile. Do not run package-manager installs
@@ -35,7 +35,8 @@ Run the demo:
 
 ```sh
 export RECALL_API_KEY=...
-export DEEPGRAM_API_KEY=...
+export OPENAI_API_KEY=...
+export ALFRED_VOICE_PROVIDER=openai-realtime
 bun run demo <meeting-link>
 ```
 
@@ -88,14 +89,22 @@ bun run --cwd agent dev
 - `ALFRED_AGUI_PORT`: local port for the `agui` Next server; default `3000`.
 - `ALFRED_AGUI_PUBLIC_BASE_URL`: skip starting/tunneling `agui` and use this public URL (run `agui` yourself).
 - `ALFRED_AGUI_SCREENSHARE_PATH`: route Recall renders for the screenshare; default `/screenshare`.
-- `ALFRED_STT_PROVIDER`: `deepgram` or `recall`; defaults to `deepgram` when `DEEPGRAM_API_KEY` is set, otherwise `recall`.
-- `DEEPGRAM_API_KEY`: enables Deepgram live STT and streaming TTS for Alfred speech output.
-- `DEEPGRAM_TTS_MODEL`: Deepgram Aura voice model, default `aura-2-draco-en`.
-- `DEEPGRAM_TTS_SAMPLE_RATE`: Deepgram TTS sample rate, default `24000`.
-- `DEEPGRAM_TTS_TIMEOUT_MS`: Deepgram TTS request timeout, default `10000`.
-- `DEEPGRAM_STT_MODEL`: Deepgram live STT model, default `nova-3`.
-- `DEEPGRAM_STT_ENDPOINTING_MS`: Deepgram pause duration for `speech_final`, default `100`.
-- `DEEPGRAM_STT_WAKE_ON_INTERIM`: set `0` to ignore interim transcripts for wake-word detection.
+- `ALFRED_VOICE_PROVIDER`: only `openai-realtime` is supported.
+- `OPENAI_API_KEY`: enables OpenAI Realtime voice.
+- `OPENAI_REALTIME_MODEL`: OpenAI Realtime model, default `gpt-realtime-2`.
+- `OPENAI_REALTIME_VOICE`: OpenAI Realtime voice, default `marin`.
+- `OPENAI_REALTIME_REASONING_EFFORT`: Realtime reasoning effort, default `low`.
+- `OPENAI_REALTIME_TRANSCRIPTION_MODEL`: Realtime input transcription model for wake-word gating, default `gpt-4o-transcribe`.
+- `ALFRED_WAKE_WORD`: word required before ctl triggers a Realtime model response, default `alfred`.
+- `OPENAI_REALTIME_NOISE_REDUCTION`: input noise reduction, `near_field`, `far_field`, or `none`; default `near_field`.
+- `OPENAI_REALTIME_VAD_TYPE`: `semantic_vad` or `server_vad`; default `semantic_vad`.
+- `OPENAI_REALTIME_VAD_THRESHOLD`: server VAD activation threshold, default `0.7`; higher values require louder speech and can help in noisy rooms.
+- `OPENAI_REALTIME_VAD_SILENCE_MS`: server VAD silence duration, default `700`.
+- `OPENAI_REALTIME_VAD_PREFIX_PADDING_MS`: server VAD prefix padding, default `300`.
+- `OPENAI_REALTIME_SEMANTIC_VAD_EAGERNESS`: semantic VAD eagerness, `low`, `medium`, `high`, or `auto`; default `medium`.
+- `OPENAI_REALTIME_INPUT_SAMPLE_RATE`: Recall raw audio sample rate, default `16000`.
+- `OPENAI_REALTIME_OUTPUT_SAMPLE_RATE`: PCM playback sample rate for Realtime output, default `24000`.
+- `OPENAI_REALTIME_INSTRUCTIONS`: override Alfred's realtime system instructions.
 
 ## Control Plane Endpoints
 
@@ -118,32 +127,29 @@ HTTP routes use Hono. Routes are registered in `ctl/src/routes/index.ts` and
 grouped by concern under `ctl/src/routes/`. `ctl/src/server.ts` owns server
 lifecycle and websocket handling.
 
-## Transcription
+## Voice and Transcription
 
-When `ALFRED_STT_PROVIDER=deepgram`, the bot enables Recall's
-`audio_mixed_raw` stream and sends raw 16 kHz mono PCM audio to `/ws/recall`.
-ctl forwards those buffers to Deepgram live STT with interim results enabled.
-This is the fastest wake-word path.
+ctl uses OpenAI's Realtime API as the voice layer. The Recall bot enables
+`audio_mixed_raw`, streams raw 16 kHz mono PCM audio to `/ws/recall`, and ctl
+forwards those PCM chunks to an OpenAI Realtime WebSocket. ctl keeps Realtime
+VAD enabled but disables automatic model responses; it only sends
+`response.create` when the completed input transcript contains
+`ALFRED_WAKE_WORD` (`alfred` by default). The model's PCM output is sent to
+`/ws/media`, where the Output Media page plays it into the meeting.
 
-When `ALFRED_STT_PROVIDER=recall`, the demo uses Recall.ai low-latency
-real-time transcription and sends transcript callbacks to `/webhooks/recall` by
-default. Set `ALFRED_REALTIME_DELIVERY=websocket` or `both` to have Recall
-connect to `/ws/recall` as well.
-
-If Alfred hears `hello alfred`, the ctl server sends a speech command to the
-Output Media webpage. When `DEEPGRAM_API_KEY` is set, ctl opens Deepgram's
-streaming Speak websocket, sends the response text, and forwards raw PCM chunks
-to `/ws/media`. The media page schedules those chunks with Web Audio so playback
-can begin before the full utterance is generated.
+`agent/` is not the primary responder. ctl exposes it to the Realtime model as a
+`delegate_to_company_agent` function tool, so the voice model can ask the
+company-memory harness for seeded docs/Slack/project context and then speak the
+result itself.
 
 If Alfred hears `start screenshare`, ctl calls Recall.ai's runtime Output Media
 endpoint for the active bot and starts `/media/screen` as a screenshare. The
 screen-share page is static and does not connect to `/ws/media` or play audio;
 audio output stays on the camera media page.
 
-There is no REST TTS output route. Alfred's spoken responses use Deepgram's
-streaming Speak websocket and are forwarded to the media page over `/ws/media`
-as raw PCM chunks.
+There is no REST audio output route. Alfred's spoken responses come directly
+from OpenAI Realtime audio deltas and are forwarded to the media page over
+`/ws/media` as raw PCM chunks. Recall transcript webhooks are ignored by ctl.
 
 Raw audio websocket payloads are not logged. ctl logs only the realtime event
 name and decoded byte count for `audio_mixed_raw.data`.

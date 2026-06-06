@@ -138,7 +138,8 @@ async function main() {
       publicBaseUrl,
       realtimeDelivery: config.realtimeDelivery,
       outputMediaMode: config.outputMediaMode,
-      enableDeepgramStt: config.sttProvider === "deepgram",
+      enableRawAudio: config.voiceProvider === "openai-realtime",
+      enableTranscriptEvents: false,
       screenshareUrl: agui?.screenshareUrl,
     });
 
