@@ -19,14 +19,15 @@ const WANDB_BASE_URL = "https://api.inference.wandb.ai/v1";
 
 /** Sensible per-provider defaults; override any of them via env (see below). */
 const DEFAULTS: Record<Provider, { baseURL?: string; fast: string; smart: string }> = {
-  // W&B Inference (default): matched Qwen3 *Instruct* (non-thinking) pair — strong tool-calling
-  // + agentic reasoning at low latency, ideal for a meeting brain that fans out to subagents and
-  // calls tools (Drive, present). FAST = 3B-active worker; SMART = flagship synth/action-decider.
-  // Swap SMART to "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-FP8" if tool-calling proves flaky.
+  // W&B Inference (default).
+  // FAST (planner + subagents): Qwen3-30B-A3B — 3B-active, snappy, strong at doc selection/extraction.
+  // SMART (synthesizer / spoken answer): granite-4.1-8b — fastest to a concise spoken answer
+  //   (~100ms TTFT, tool-tuned) so the meeting voice feels real-time. For higher-quality (slower)
+  //   synthesis, swap SMART to "Qwen/Qwen3-235B-A22B-Instruct-2507".
   wandb: {
     baseURL: WANDB_BASE_URL,
     fast: "Qwen/Qwen3-30B-A3B-Instruct-2507",
-    smart: "Qwen/Qwen3-235B-A22B-Instruct-2507",
+    smart: "ibm-granite/granite-4.1-8b",
   },
   // OpenAI proper: keep the small model for routing, the flagship for synthesis.
   openai: { baseURL: undefined, fast: "gpt-4o-mini", smart: "gpt-4o" },

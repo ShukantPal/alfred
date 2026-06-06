@@ -1,4 +1,5 @@
 import type { Server, ServerWebSocket } from "bun";
+import { createAgentClient } from "./agent/client";
 import { createRouter } from "./routes";
 import { createDeepgramSttFromEnv, extractRecallMixedAudio } from "./stt/deepgram";
 import { createTranscriptResponder } from "./transcript";
@@ -52,7 +53,14 @@ export function startCtlServer(
     }
     sendMediaJson(sockets, message);
   };
-  const transcripts = createTranscriptResponder({ broadcast });
+  // Bridge to the agent/ harness: addressed utterances are answered by the harness, streamed
+  // back, and spoken via TTS. Falls back to a greeting if the agent server is unreachable.
+  const agentUrl = process.env.ALFRED_AGENT_URL ?? "ws://127.0.0.1:8787";
+  const meetingId = process.env.ALFRED_MEETING_ID ?? `ctl-${crypto.randomUUID().slice(0, 8)}`;
+  const agent = createAgentClient({ url: agentUrl, meetingId });
+  console.log(`[ctl] agent bridge -> ${agentUrl} (meeting ${meetingId})`);
+
+  const transcripts = createTranscriptResponder({ broadcast, agent });
   const stt = createDeepgramSttFromEnv(process.env, payload =>
     transcripts.handle(payload, "deepgram"),
   );
@@ -125,6 +133,7 @@ export function startCtlServer(
         socket.close();
       }
       stt.close();
+      agent.close();
       server.stop(true);
     },
     broadcast,
