@@ -11,6 +11,10 @@ export interface CtlServer {
   broadcast(message: unknown): void;
 }
 
+export interface CtlServerOptions {
+  onStartScreenshare?(): void;
+}
+
 interface WebSocketData {
   path: string;
 }
@@ -19,12 +23,17 @@ type MediaSocket = ServerWebSocket<WebSocketData>;
 type MediaCommand =
   | { type: "status"; message?: string }
   | { type: "say"; text?: string }
+  | { type: "start_screenshare" }
   | { type: "audio_level"; level: number }
   | { type: "speak_stream_start"; id: string; text: string; sampleRate: number }
   | { type: "speak_stream_end"; id: string }
   | { type: "speak_stream_error"; id: string; message: string };
 
-export function startCtlServer(hostname: string, port: number): CtlServer {
+export function startCtlServer(
+  hostname: string,
+  port: number,
+  options: CtlServerOptions = {},
+): CtlServer {
   const sockets = new Set<ServerWebSocket<WebSocketData>>();
   const audioLog = createAudioChunkLogger(30_000);
   const tts = createDeepgramTtsFromEnv(process.env);
@@ -35,6 +44,10 @@ export function startCtlServer(hostname: string, port: number): CtlServer {
   const broadcast = (message: MediaCommand) => {
     if (message.type === "say" && message.text) {
       speechStreamer.enqueue(message.text);
+      return;
+    }
+    if (message.type === "start_screenshare") {
+      options.onStartScreenshare?.();
       return;
     }
     sendMediaJson(sockets, message);

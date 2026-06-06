@@ -33,6 +33,29 @@ export class RecallClient {
     return response.json();
   }
 
+  async startOutputMedia(botId: string, payload: unknown): Promise<unknown> {
+    const response = await fetch(`${this.baseUrl}/bot/${botId}/output_media/`, {
+      method: "POST",
+      headers: {
+        Authorization: normalizeAuthorizationHeader(this.apiKey),
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(
+        `Recall Start Output Media failed: ${response.status} ${response.statusText}\n${body}`,
+      );
+    }
+
+    if (response.status === 204) return undefined;
+    const body = await response.text();
+    return body ? JSON.parse(body) : undefined;
+  }
+
   async leaveBotCall(botId: string, timeoutMs: number): Promise<unknown> {
     const abort = new AbortController();
     const timeout = setTimeout(() => abort.abort(), timeoutMs);
