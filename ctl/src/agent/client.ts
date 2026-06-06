@@ -2,7 +2,7 @@
  * Client for the agent/ layer. ctl/ owns the meeting; agent/ owns memory + harness.
  *
  * Wire contract SOURCE OF TRUTH: agent/src/protocol.ts. It is mirrored here as plain
- * TypeScript types (no zod) so ctl/ (Bun) stays decoupled from agent/ (npm). One WebSocket
+ * TypeScript types (no zod) so ctl/ stays decoupled from agent/. One WebSocket
  * per meeting: ctl/ sends `sendMessage`, agent/ streams `agentMessage` deltas back.
  */
 

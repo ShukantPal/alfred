@@ -1,8 +1,8 @@
 # Project Context — Meeting-Native Company Agent (WeaveHacks 4)
 
 > This file is the source of truth for AI coding tools (Claude Code, Codex). Read it fully
-> before generating or editing code. It describes the WHOLE system; the code in this package
-> is only the `agent/` layer. Build the rest against the contract in `agent/src/protocol.ts`.
+> before generating or editing code. It describes the WHOLE monorepo and the contract in
+> `agent/src/protocol.ts`.
 
 ## What we are building (one line)
 A bot that joins a company's meetings, holds company-wide context (Google Drive docs, Slack,
@@ -21,18 +21,18 @@ screen. Seed data for exactly this is in `agent/src/seed.ts`.
 Three top-level layers. **All TypeScript.** ESM modules.
 
 ```
-ctl/            Meeting control plane. Entry-point CLI: `npm run demo https://meet.google.com/XYZ`
+ctl/            Meeting control plane. Entry-point CLI: `bun run demo https://meet.google.com/XYZ`
                 Owns meeting I/O via Recall.ai (audio in/out, screen share, video, recording).
                 Owns STT (speech->text) and TTS (text->speech). Owns "address detection"
                 (is the agent being spoken to?). Talks to agent/ over ONE WebSocket per meeting.
 
-agent/          THIS PACKAGE. Owns MEMORY + HARNESS. Exposes RPCs over WebSocket:
+agent/          Owns MEMORY + HARNESS. Exposes RPCs over WebSocket:
                   in : sendMessage (text utterance), session (open/close)
                   out: agentMessage (streaming text), agentAction, agentTrace, agentError
                 Live orchestrator agent that DELEGATES to subagents. No meeting/audio code here.
 
 computer-use/   MCP server that lets the agent log into a URL and present it, then connects to
-                ctl/ to screen-share it. Entry: `npm run demo-computer-use https://docs.google.com/XYZ`
+                ctl/ to screen-share it. Entry: `bun run demo-computer-use https://docs.google.com/XYZ`
                 Use Browserbase for the browser. Record/pipe to Recall.ai.
 ```
 
@@ -70,19 +70,19 @@ KEY RULE: the agent only produces a turn when `addressedToAgent === true`. All o
 are logged to working memory but NOT answered, so the bot doesn't talk over human crosstalk.
 ctl/ is responsible for setting `addressedToAgent` (wake word / direct-address detection).
 
-## agent/ internals (this package)
-- `src/protocol.ts` — the wire contract (zod-validated inbound, typed outbound). SOURCE OF TRUTH.
-- `src/memory.ts`   — Redis memory: company context (ContextDoc with `owner`) + per-meeting turns.
-                      Has an in-memory FALLBACK if Redis is unreachable (demo-safe; not for prod).
-                      `retrieve()` is keyword-scored now — swap for RediSearch KNN to win Redis.
-- `src/harness.ts`  — orchestrator -> subagents (docs/people/memory) -> synthesizer (streams out).
-                      Orchestrator + subagents use a FAST model; synthesis uses a SMART model.
-                      Every node is a weave.op.
-- `src/llm.ts`      — LLM provider: ONE OpenAI-compatible client (W&B Inference or OpenAI),
-                      wrapped with `weave.wrapOpenAI` so every chat call is traced from the start.
-- `src/server.ts`   — WebSocket server exposing the RPCs; `weave.init` here.
-- `src/seed.ts`     — seeds the holiday use case.
-- `src/demo-client.ts` — simulates ctl/ to exercise the layer without meeting plumbing.
+## agent/ internals
+- `agent/src/protocol.ts` — the wire contract (zod-validated inbound, typed outbound). SOURCE OF TRUTH.
+- `agent/src/memory.ts`   — Redis memory: company context (ContextDoc with `owner`) + per-meeting turns.
+                           Has an in-memory FALLBACK if Redis is unreachable (demo-safe; not for prod).
+                           `retrieve()` is keyword-scored now — swap for RediSearch KNN to win Redis.
+- `agent/src/harness.ts`  — orchestrator -> subagents (docs/people/memory) -> synthesizer (streams out).
+                           Orchestrator + subagents use a FAST model; synthesis uses a SMART model.
+                           Every node is a weave.op.
+- `agent/src/llm.ts`      — LLM provider: ONE OpenAI-compatible client (W&B Inference or OpenAI),
+                           wrapped with `weave.wrapOpenAI` so every chat call is traced from the start.
+- `agent/src/server.ts`   — WebSocket server exposing the RPCs; `weave.init` here.
+- `agent/src/seed.ts`     — seeds the holiday use case.
+- `agent/src/demo-client.ts` — simulates ctl/ to exercise the layer without meeting plumbing.
 
 ## LLM provider (OpenAI-compatible; W&B Inference default)
 We use the OpenAI SDK against an OpenAI-compatible endpoint, switchable via `LLM_PROVIDER`:
@@ -93,7 +93,7 @@ The client is wrapped with `weave.wrapOpenAI`, so each `chat.completions.create`
 span nested under its owning `weave.op` node (orchestrator/docs/people/synth). Weave from the
 get-go — no extra instrumentation needed for LLM calls.
 
-### Models (config, change freely — see `src/llm.ts`)
+### Models (config, change freely — see `agent/src/llm.ts`)
 - wandb  → FAST `Qwen/Qwen3-30B-A3B-Instruct-2507` (orchestrator + spawned subagents),
            SMART `Qwen/Qwen3-235B-A22B-Instruct-2507` (synthesis + tool/action decisions)
 - openai → FAST `gpt-4o-mini`, SMART `gpt-4o`
@@ -105,15 +105,14 @@ fast model — slow sequential calls compound into latency.
 
 ## Run (agent/ only)
 ```
-cd agent
-cp .env.example .env        # set WANDB_API_KEY (default provider); REDIS_URL optional (fallback)
-npm install
-npm run dev                 # start WebSocket server on ws://localhost:8787
-npx tsx src/seed.ts         # seed company context (use real Redis so server shares the store)
-npm run demo                # simulate ctl/: asks the holiday question, prints streamed answer + trace
+cp agent/.env.example agent/.env  # set WANDB_API_KEY (default provider); REDIS_URL optional (fallback)
+bun install                 # run from repo root
+bun run agent:dev           # start WebSocket server on ws://localhost:8787
+bun run agent:seed          # seed company context (use real Redis so server shares the store)
+bun run agent:demo          # simulate ctl/: asks the holiday question, prints streamed answer + trace
 ```
 Env: `WANDB_API_KEY` (default provider + Weave), or `OPENAI_API_KEY` with `LLM_PROVIDER=openai`;
-plus optional `REDIS_URL`, `WEAVE_PROJECT`, `AGENT_PORT`. See `.env.example`.
+plus optional `REDIS_URL`, `WEAVE_PROJECT`, `AGENT_PORT`. See `agent/.env.example`.
 NOTE: seed and server are separate processes — with the in-memory fallback the seed won't be
 visible to the server. Run a real Redis (`docker run -p 6379:6379 redis`) so both share state.
 
@@ -142,7 +141,6 @@ visible to the server. Run a real Redis (`docker run -p 6379:6379 redis`) so bot
 
 ## Conventions
 - TypeScript, ESM (`"type": "module"`), Node 20+. Strict mode on.
-- Validate all inbound frames with zod (see protocol.ts). Outbound frames are plain typed objects.
+- Validate all inbound frames with zod (see `agent/src/protocol.ts`). Outbound frames are plain typed objects.
 - Wrap every agent/subagent reasoning step in `weave.op` so it shows in the trace.
-- Keep the protocol stable: if you change it, change `protocol.ts` and update this file in the same commit.
-```
+- Keep the protocol stable: if you change it, change `agent/src/protocol.ts` and update this file in the same commit.

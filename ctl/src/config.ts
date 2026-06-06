@@ -1,3 +1,7 @@
+import { config as loadDotEnv } from "dotenv";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+
 export type RealtimeDelivery = "webhook" | "websocket" | "both";
 export type OutputMediaMode = "camera" | "screenshare" | "none";
 export type SttProvider = "recall" | "deepgram";
@@ -21,6 +25,8 @@ export interface DemoConfig {
 }
 
 export function readDemoConfig(argv: string[], env: NodeJS.ProcessEnv): DemoConfig {
+  loadRepoEnv(env);
+
   const meetingUrl = argv[0];
   if (!meetingUrl) {
     throw new UsageError("Usage: bun run demo <meeting-link>");
@@ -54,6 +60,12 @@ export function readDemoConfig(argv: string[], env: NodeJS.ProcessEnv): DemoConf
 
 export class UsageError extends Error {
   name = "UsageError";
+}
+
+function loadRepoEnv(env: NodeJS.ProcessEnv): void {
+  const sourceDir = fileURLToPath(new URL(".", import.meta.url));
+  const repoEnvPath = join(sourceDir, "..", "..", ".env");
+  loadDotEnv({ path: repoEnvPath, processEnv: env, quiet: true });
 }
 
 function readInteger(value: string | undefined, fallback: number): number {

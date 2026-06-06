@@ -8,16 +8,16 @@ This package owns **memory (Redis)** and the **harness** (a live orchestrator th
 subagents). It exposes RPCs over a WebSocket that the meeting control plane (`ctl/`) connects to.
 It contains no meeting/audio code — that lives in `ctl/`.
 
-**For AI coding tools and full system context, read [AGENTS.md](./AGENTS.md).**
+**For AI coding tools and full system context, read [AGENTS.md](../AGENTS.md).**
 
 ## Quick start
 ```bash
 cp .env.example .env          # set WANDB_API_KEY — powers W&B Inference + Weave (REDIS_URL optional; in-memory fallback if absent)
-npm install
+bun install                   # run from repo root
 docker run -p 6379:6379 redis # recommended so seed + server share state
-npm run dev                   # WebSocket server on ws://localhost:8787
-npx tsx src/seed.ts           # seed the "Priya is on PTO" company context
-npm run demo                  # simulate ctl/: ask the holiday question; see streamed answer + trace
+bun run agent:dev             # WebSocket server on ws://localhost:8787
+bun run agent:seed            # seed the "Priya is on PTO" company context
+bun run agent:demo            # simulate ctl/: ask the holiday question; see streamed answer + trace
 ```
 
 ## The contract (what `ctl/` codes against)
@@ -38,5 +38,5 @@ npm run demo                  # simulate ctl/: ask the holiday question; see str
 | `src/demo-client.ts` | Simulates ctl/ end-to-end |
 
 ## Sponsor hooks
-Weave (every node is a `weave.op` → trace = delegation tree), Redis (memory; upgrade `retrieve`
-to RediSearch KNN), CopilotKit (stretch UI via `agentTrace`). See AGENTS.md for the full mapping.
+Weave (every node is a `weave.op` -> trace = delegation tree), Redis (memory; upgrade `retrieve`
+to RediSearch KNN), CopilotKit (stretch UI via `agentTrace`). See root `AGENTS.md` for the full mapping.

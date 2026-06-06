@@ -1,9 +1,11 @@
-import "dotenv/config";
+import { loadRepoEnv } from "./env.js";
 import { WebSocketServer, WebSocket } from "ws";
 import { InboundFrame, type OutboundFrame } from "./protocol.js";
 import { Memory } from "./memory.js";
 import { Harness } from "./harness.js";
 import { initWeave } from "./observability.js";
+
+loadRepoEnv();
 
 /**
  * agent/ server. One WebSocket per meeting connection from ctl/.

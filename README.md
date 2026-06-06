@@ -3,6 +3,16 @@
 Alfred is a live meeting participant. The current control plane lives in `ctl/`
 and uses Recall.ai to send a bot into a meeting.
 
+## Monorepo
+
+Alfred is a Bun workspace monorepo:
+
+- `ctl/`: meeting control plane, Recall.ai integration, media pages, STT/TTS.
+- `agent/`: company memory and agent harness exposed over WebSocket.
+
+Use the root `bun.lock` as the only lockfile. Do not run package-manager installs
+inside workspace packages.
+
 ## Demo
 
 Install dependencies:
@@ -40,6 +50,23 @@ Stop persistent tunnels:
 
 ```sh
 bun run demo:stop-tunnels
+```
+
+## Agent
+
+Run agent commands from the repo root:
+
+```sh
+bun run agent:dev    # WebSocket server on ws://localhost:8787
+bun run agent:seed   # seed company context
+bun run agent:demo   # simulate ctl/ against the agent server
+bun run agent:test   # run agent tests
+```
+
+You can also run the workspace scripts directly:
+
+```sh
+bun run --cwd agent dev
 ```
 
 ## Environment

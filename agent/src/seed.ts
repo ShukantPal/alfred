@@ -1,6 +1,8 @@
-import "dotenv/config";
+import { loadRepoEnv } from "./env.js";
 import { Memory } from "./memory.js";
 import { COMPANY_DOCS } from "./seed-data.js";
+
+loadRepoEnv();
 
 async function main() {
   const memory = new Memory();

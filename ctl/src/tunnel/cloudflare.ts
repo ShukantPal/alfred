@@ -10,6 +10,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 export interface CloudflareTunnel {
   publicBaseUrl: string;
@@ -42,8 +43,10 @@ interface TunnelEntry {
 }
 
 const TRY_CLOUDFLARE_URL = /https:\/\/[^\s|]+\.trycloudflare\.com/;
-const root = process.cwd();
-const toolsDir = join(root, ".tools");
+const tunnelSourceDir = fileURLToPath(new URL(".", import.meta.url));
+const ctlRoot = join(tunnelSourceDir, "..", "..");
+const repoRoot = join(ctlRoot, "..");
+const toolsDir = join(repoRoot, ".tools");
 const tunnelStatePath = join(toolsDir, "alfred-tunnels.json");
 
 export async function startCloudflareTunnel(
@@ -88,7 +91,7 @@ export async function startCloudflareTunnel(
   writeFileSync(logPath, "");
   const out = openSync(logPath, "a");
   const child = spawn(cloudflaredPath, ["tunnel", "--url", options.localBaseUrl], {
-    cwd: root,
+    cwd: repoRoot,
     detached: true,
     stdio: ["ignore", out, out],
   });
@@ -159,7 +162,7 @@ function resolveCloudflared(configured?: string): string {
   const candidates = [
     configured,
     join(toolsDir, "cloudflared"),
-    join(root, "..", "Take3", ".tools", "cloudflared"),
+    join(repoRoot, "..", "Take3", ".tools", "cloudflared"),
   ].filter(Boolean) as string[];
 
   for (const candidate of candidates) {

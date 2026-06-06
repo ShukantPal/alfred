@@ -1,5 +1,8 @@
 import OpenAI from "openai";
 import { wrapOpenAI } from "weave";
+import { loadRepoEnv } from "./env.js";
+
+loadRepoEnv();
 
 /**
  * LLM provider for the agent layer. One OpenAI-compatible client, switchable between

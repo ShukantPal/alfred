@@ -1,15 +1,17 @@
-import "dotenv/config";
+import { loadRepoEnv } from "./env.js";
 import { WebSocket } from "ws";
 import { randomUUID } from "node:crypto";
 import type { OutboundFrame } from "./protocol.js";
+
+loadRepoEnv();
 
 /**
  * Simulates ctl/: opens a session, sends an addressed utterance, prints the streamed
  * answer and the delegation trace. Run the server + seed first.
  *
- *   npm run start        # in one terminal (after build), or: npm run dev
- *   npx tsx src/seed.ts  # seed company context
- *   npm run demo         # this client
+ *   bun run agent:start  # in one terminal (after build), or: bun run agent:dev
+ *   bun run agent:seed   # seed company context
+ *   bun run agent:demo   # this client
  */
 
 const URL = process.env.AGENT_URL ?? "ws://localhost:8787";
