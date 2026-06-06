@@ -1,0 +1,32 @@
+{
+  "name": "@alfred/agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Agent layer: owns memory + harness, exposes RPCs (sendMessage in, streaming agentMessage out) over WebSocket.",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "check": "tsc --noEmit -p tsconfig.json",
+    "build": "tsc -p tsconfig.json",
+    "dev": "bun --watch src/server.ts",
+    "start": "bun dist/server.js",
+    "demo": "bun src/demo-client.ts",
+    "seed": "bun src/seed.ts",
+    "smoke": "bun src/smoke.ts",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "dotenv": "^17.4.2",
+    "ioredis": "^5.4.1",
+    "openai": "^4.104.0",
+    "weave": "^0.7.0",
+    "ws": "^8.18.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.4",
+    "@types/ws": "^8.5.12",
+    "typescript": "^5.6.2",
+    "vitest": "^4.1.8"
+  }
+}

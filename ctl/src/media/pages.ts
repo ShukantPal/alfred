@@ -1,9 +1,11 @@
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const cameraPagePath = join(process.cwd(), "ctl", "src", "media", "camera.html");
-const screenPagePath = join(process.cwd(), "ctl", "src", "media", "screen.html");
-const cameraAppPath = join(process.cwd(), "ctl", "src", "media", "camera.ts");
-const screenAppPath = join(process.cwd(), "ctl", "src", "media", "screen.ts");
+const mediaDir = fileURLToPath(new URL(".", import.meta.url));
+const cameraPagePath = join(mediaDir, "camera.html");
+const screenPagePath = join(mediaDir, "screen.html");
+const cameraAppPath = join(mediaDir, "camera.ts");
+const screenAppPath = join(mediaDir, "screen.ts");
 
 export function cameraPage(): Response {
   return mediaShell(cameraPagePath);
