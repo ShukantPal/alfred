@@ -8,6 +8,8 @@ export interface BuildCreateBotPayloadOptions {
   realtimeDelivery: RealtimeDelivery;
   outputMediaMode: OutputMediaMode;
   enableDeepgramStt: boolean;
+  /** Overrides the screenshare webpage URL (e.g. the agui surface). */
+  screenshareUrl?: string;
 }
 
 export function buildCreateBotPayload(options: BuildCreateBotPayloadOptions): object {
@@ -46,7 +48,11 @@ export function buildCreateBotPayload(options: BuildCreateBotPayloadOptions): ob
     (payload.recording_config as Record<string, unknown>).audio_mixed_raw = {};
   }
 
-  const outputMedia = buildOutputMedia(options.publicBaseUrl, options.outputMediaMode);
+  const outputMedia = buildOutputMedia(
+    options.publicBaseUrl,
+    options.outputMediaMode,
+    options.screenshareUrl,
+  );
   if (outputMedia) {
     payload.output_media = outputMedia;
   }
@@ -56,6 +62,11 @@ export function buildCreateBotPayload(options: BuildCreateBotPayloadOptions): ob
 
 export function buildScreenshareOutputMedia(publicBaseUrl: string): object {
   return buildOutputMedia(publicBaseUrl, "screenshare") ?? {};
+}
+
+/** Builds a screenshare output_media payload that renders an explicit webpage URL. */
+export function buildWebpageScreenshareOutputMedia(url: string): object {
+  return { screenshare: { kind: "webpage", config: { url } } };
 }
 
 function buildRealtimeEndpoints(
@@ -104,15 +115,20 @@ function buildRealtimeEndpoints(
 function buildOutputMedia(
   publicBaseUrl: string,
   mode: OutputMediaMode,
+  screenshareUrl?: string,
 ): object | undefined {
   if (mode === "none") return undefined;
 
-  const path = mode === "screenshare" ? "/media/screen" : "/media/camera";
+  if (mode === "screenshare") {
+    const url = screenshareUrl ?? `${publicBaseUrl}/media/screen`;
+    return { screenshare: { kind: "webpage", config: { url } } };
+  }
+
   return {
-    [mode]: {
+    camera: {
       kind: "webpage",
       config: {
-        url: `${publicBaseUrl}${path}`,
+        url: `${publicBaseUrl}/media/camera`,
       },
     },
   };

@@ -22,6 +22,11 @@ export interface DemoConfig {
   realtimeDelivery: RealtimeDelivery;
   outputMediaMode: OutputMediaMode;
   sttProvider: SttProvider;
+  aguiScreenshare: boolean;
+  aguiDir: string;
+  aguiPort: number;
+  aguiPublicBaseUrl?: string;
+  aguiScreensharePath: string;
 }
 
 export function readDemoConfig(argv: string[], env: NodeJS.ProcessEnv): DemoConfig {
@@ -55,6 +60,11 @@ export function readDemoConfig(argv: string[], env: NodeJS.ProcessEnv): DemoConf
     realtimeDelivery: readRealtimeDelivery(env.ALFRED_REALTIME_DELIVERY),
     outputMediaMode: readOutputMediaMode(env.ALFRED_OUTPUT_MEDIA),
     sttProvider: readSttProvider(env),
+    aguiScreenshare: readBoolean(env.ALFRED_AGUI_SCREENSHARE, true),
+    aguiDir: env.ALFRED_AGUI_DIR ?? join(process.cwd(), "agui"),
+    aguiPort: readInteger(env.ALFRED_AGUI_PORT, 3000),
+    aguiPublicBaseUrl: normalizeBaseUrl(env.ALFRED_AGUI_PUBLIC_BASE_URL),
+    aguiScreensharePath: env.ALFRED_AGUI_SCREENSHARE_PATH ?? "/screenshare",
   };
 }
 
@@ -66,6 +76,11 @@ function loadRepoEnv(env: NodeJS.ProcessEnv): void {
   const sourceDir = fileURLToPath(new URL(".", import.meta.url));
   const repoEnvPath = join(sourceDir, "..", "..", ".env");
   loadDotEnv({ path: repoEnvPath, processEnv: env, quiet: true });
+}
+
+function readBoolean(value: string | undefined, fallback: boolean): boolean {
+  if (value === undefined) return fallback;
+  return value !== "0" && value.toLowerCase() !== "false";
 }
 
 function readInteger(value: string | undefined, fallback: number): number {

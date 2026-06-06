@@ -83,6 +83,11 @@ bun run --cwd agent dev
 - `ALFRED_SHUTDOWN_TIMEOUT_MS`: timeout for asking Recall to remove the bot, default `10000`.
 - `ALFRED_REALTIME_DELIVERY`: `webhook`, `websocket`, or `both`; default `webhook`.
 - `ALFRED_OUTPUT_MEDIA`: `camera`, `screenshare`, or `none`; default `camera`.
+- `ALFRED_AGUI_SCREENSHARE`: render the `agui` CopilotKit panels as Alfred's screenshare; default `true`. Set `0`/`false` to fall back to `ctl`'s `/media/screen`.
+- `ALFRED_AGUI_DIR`: path to the `agui` Next app; default `<cwd>/agui`.
+- `ALFRED_AGUI_PORT`: local port for the `agui` Next server; default `3000`.
+- `ALFRED_AGUI_PUBLIC_BASE_URL`: skip starting/tunneling `agui` and use this public URL (run `agui` yourself).
+- `ALFRED_AGUI_SCREENSHARE_PATH`: route Recall renders for the screenshare; default `/screenshare`.
 - `ALFRED_STT_PROVIDER`: `deepgram` or `recall`; defaults to `deepgram` when `DEEPGRAM_API_KEY` is set, otherwise `recall`.
 - `DEEPGRAM_API_KEY`: enables Deepgram live STT and streaming TTS for Alfred speech output.
 - `DEEPGRAM_TTS_MODEL`: Deepgram Aura voice model, default `aura-2-draco-en`.
@@ -142,6 +147,19 @@ as raw PCM chunks.
 
 Raw audio websocket payloads are not logged. ctl logs only the realtime event
 name and decoded byte count for `audio_mixed_raw.data`.
+
+## Screenshare surface
+
+When `ALFRED_AGUI_SCREENSHARE` is enabled (the default), `bun run demo` boots the
+`agui` Next app and opens a second persistent Cloudflare tunnel named `agui` to
+it. Whenever Alfred screenshares — either from `ALFRED_OUTPUT_MEDIA=screenshare`
+at startup, or the runtime "start screenshare" trigger — Recall renders the
+`agui` `/screenshare` route instead of `ctl`'s `/media/screen`. That surface
+shows a top bar of app tabs (Docs, Slides, Sheets, etc.), a left sidebar split
+between running meeting notes and tasks, and a main workspace for the selected
+app. If `agui` fails to start, the demo logs the error and falls back to
+`/media/screen`. The `agui` Next server is stopped on `Ctrl+C`; both tunnels
+persist and are stopped with `bun run demo:stop-tunnels`.
 
 ## Shutdown
 
