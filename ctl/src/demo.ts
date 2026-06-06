@@ -1,8 +1,9 @@
 import { readDemoConfig, UsageError } from "./config";
 import { RecallClient } from "./recall/client";
-import { buildCreateBotPayload, buildScreenshareOutputMedia } from "./recall/bots";
+import { buildCreateBotPayload, buildWebpageScreenshareOutputMedia } from "./recall/bots";
 import { startCtlServer, type CtlServer } from "./server";
 import { startCloudflareTunnel, type CloudflareTunnel } from "./tunnel/cloudflare";
+import { startAguiScreenshareServer, type AguiScreenshareServer } from "./agui";
 
 async function main() {
   const config = readDemoConfig(Bun.argv.slice(2), process.env);
@@ -11,12 +12,17 @@ async function main() {
   let recall: RecallClient | undefined;
   let botId: string | undefined;
   let publicBaseUrl: string | undefined = config.publicBaseUrl;
+  let agui: AguiScreenshareServer | undefined;
   let isShuttingDown = false;
   let isStartingScreenshare = false;
 
+  const screenshareUrl = () =>
+    agui?.screenshareUrl ?? (publicBaseUrl ? `${publicBaseUrl}/media/screen` : undefined);
+
   const startScreenshare = async () => {
     if (isStartingScreenshare) return;
-    if (!botId || !recall || !publicBaseUrl) {
+    const target = screenshareUrl();
+    if (!botId || !recall || !target) {
       console.warn("[demo] cannot start screenshare before the Recall bot is ready");
       ctlServer?.broadcast({
         type: "status",
@@ -29,8 +35,8 @@ async function main() {
     ctlServer?.broadcast({ type: "status", message: "starting screenshare" });
 
     try {
-      await recall.startOutputMedia(botId, buildScreenshareOutputMedia(publicBaseUrl));
-      console.log(`[demo] Recall screenshare output media started: ${publicBaseUrl}/media/screen`);
+      await recall.startOutputMedia(botId, buildWebpageScreenshareOutputMedia(target));
+      console.log(`[demo] Recall screenshare output media started: ${target}`);
       ctlServer?.broadcast({ type: "status", message: "screenshare started" });
     } catch (error) {
       console.error("[demo] failed to start Recall screenshare output media");
@@ -55,6 +61,7 @@ async function main() {
       }
     }
 
+    agui?.stop();
     tunnel?.stop();
     ctlServer?.stop();
   };
@@ -95,6 +102,28 @@ async function main() {
       config.outputMediaMode === "screenshare" ? "screen" : config.outputMediaMode;
     console.log(`[demo] media URL: ${publicBaseUrl}/media/${mediaPath}`);
 
+    if (config.aguiScreenshare) {
+      try {
+        console.log("[demo] starting agui screenshare surface");
+        agui = await startAguiScreenshareServer({
+          aguiDir: config.aguiDir,
+          port: config.aguiPort,
+          screensharePath: config.aguiScreensharePath,
+          publicBaseUrl: config.aguiPublicBaseUrl,
+          cloudflaredBin: config.cloudflaredBin,
+          tunnelName: "agui",
+          tunnelTimeoutMs: config.tunnelTimeoutMs,
+          env: process.env,
+        });
+        console.log(`[demo] agui screenshare URL: ${agui.screenshareUrl}`);
+      } catch (error) {
+        console.error(
+          "[demo] failed to start agui screenshare surface; falling back to ctl /media/screen",
+        );
+        console.error(error);
+      }
+    }
+
     ctlServer.broadcast({ type: "status", message: "joining meeting" });
 
     recall = new RecallClient({
@@ -110,6 +139,7 @@ async function main() {
       realtimeDelivery: config.realtimeDelivery,
       outputMediaMode: config.outputMediaMode,
       enableDeepgramStt: config.sttProvider === "deepgram",
+      screenshareUrl: agui?.screenshareUrl,
     });
 
     console.log("[demo] creating Recall bot");
