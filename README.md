@@ -57,7 +57,7 @@ bun run demo:stop-tunnels
 - `ALFRED_REALTIME_DELIVERY`: `webhook`, `websocket`, or `both`; default `webhook`.
 - `ALFRED_OUTPUT_MEDIA`: `camera`, `screenshare`, or `none`; default `camera`.
 - `ALFRED_STT_PROVIDER`: `deepgram` or `recall`; defaults to `deepgram` when `DEEPGRAM_API_KEY` is set, otherwise `recall`.
-- `DEEPGRAM_API_KEY`: enables Deepgram REST TTS for Alfred speech output.
+- `DEEPGRAM_API_KEY`: enables Deepgram live STT and streaming TTS for Alfred speech output.
 - `DEEPGRAM_TTS_MODEL`: Deepgram Aura voice model, default `aura-2-draco-en`.
 - `DEEPGRAM_TTS_SAMPLE_RATE`: Deepgram TTS sample rate, default `24000`.
 - `DEEPGRAM_TTS_TIMEOUT_MS`: Deepgram TTS request timeout, default `10000`.
@@ -72,11 +72,15 @@ bun run demo:stop-tunnels
 - `WS /ws/recall`
 - `GET /media/camera`
 - `GET /media/screen`
-- `GET /media/app.js`
+- `GET /media/camera.js`
+- `GET /media/screen.js`
 
 `/media/camera` serves `ctl/src/media/camera.html`, and `/media/screen` serves
-`ctl/src/media/screen.html`. The UI and audio player are implemented in
-`ctl/src/media/app.ts` and bundled by Bun at `/media/app.js`.
+`ctl/src/media/screen.html`. The camera UI is implemented in
+`ctl/src/media/camera.ts`, the screen-share UI is implemented in
+`ctl/src/media/screen.ts`, and shared websocket/audio playback code lives in
+`ctl/src/media/shared.ts`. Bun bundles them at `/media/camera.js` and
+`/media/screen.js`.
 
 HTTP routes use Hono. Routes are registered in `ctl/src/routes/index.ts` and
 grouped by concern under `ctl/src/routes/`. `ctl/src/server.ts` owns server
@@ -99,6 +103,11 @@ Output Media webpage. When `DEEPGRAM_API_KEY` is set, ctl opens Deepgram's
 streaming Speak websocket, sends the response text, and forwards raw PCM chunks
 to `/ws/media`. The media page schedules those chunks with Web Audio so playback
 can begin before the full utterance is generated.
+
+If Alfred hears `start screenshare`, ctl calls Recall.ai's runtime Output Media
+endpoint for the active bot and starts `/media/screen` as a screenshare. The
+screen-share page is static and does not connect to `/ws/media` or play audio;
+audio output stays on the camera media page.
 
 There is no REST TTS output route. Alfred's spoken responses use Deepgram's
 streaming Speak websocket and are forwarded to the media page over `/ws/media`

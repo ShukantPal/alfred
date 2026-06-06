@@ -11,6 +11,10 @@ export interface CtlServer {
   broadcast(message: unknown): void;
 }
 
+export interface CtlServerOptions {
+  onStartScreenshare?(): void;
+}
+
 interface WebSocketData {
   path: string;
 }
@@ -19,11 +23,17 @@ type MediaSocket = ServerWebSocket<WebSocketData>;
 type MediaCommand =
   | { type: "status"; message?: string }
   | { type: "say"; text?: string }
+  | { type: "start_screenshare" }
+  | { type: "audio_level"; level: number }
   | { type: "speak_stream_start"; id: string; text: string; sampleRate: number }
   | { type: "speak_stream_end"; id: string }
   | { type: "speak_stream_error"; id: string; message: string };
 
-export function startCtlServer(hostname: string, port: number): CtlServer {
+export function startCtlServer(
+  hostname: string,
+  port: number,
+  options: CtlServerOptions = {},
+): CtlServer {
   const sockets = new Set<ServerWebSocket<WebSocketData>>();
   const audioLog = createAudioChunkLogger(30_000);
   const tts = createDeepgramTtsFromEnv(process.env);
@@ -34,6 +44,10 @@ export function startCtlServer(hostname: string, port: number): CtlServer {
   const broadcast = (message: MediaCommand) => {
     if (message.type === "say" && message.text) {
       speechStreamer.enqueue(message.text);
+      return;
+    }
+    if (message.type === "start_screenshare") {
+      options.onStartScreenshare?.();
       return;
     }
     sendMediaJson(sockets, message);
@@ -80,6 +94,10 @@ export function startCtlServer(hostname: string, port: number): CtlServer {
             const audio = extractRecallMixedAudio(payload);
             if (audio) {
               audioLog(audio.byteLength);
+              sendMediaJson(sockets, {
+                type: "audio_level",
+                level: calculatePcmLevel(audio),
+              });
               stt.sendPcm(audio);
             } else {
               console.log(`[ctl] websocket message /ws/recall ${summarizePayload(payload)}`);
@@ -272,6 +290,21 @@ function createAudioChunkLogger(intervalMs: number) {
     chunkCount = 0;
     byteCount = 0;
   };
+}
+
+function calculatePcmLevel(audio: Uint8Array): number {
+  const sampleCount = Math.floor(audio.byteLength / 2);
+  if (sampleCount === 0) return 0;
+
+  const view = new DataView(audio.buffer, audio.byteOffset, audio.byteLength);
+  let sumSquares = 0;
+  for (let index = 0; index < sampleCount; index += 1) {
+    const sample = view.getInt16(index * 2, true) / 32768;
+    sumSquares += sample * sample;
+  }
+
+  const rms = Math.sqrt(sumSquares / sampleCount);
+  return Math.max(0, Math.min(1, rms * 10));
 }
 
 function parseSocketMessage(message: string | ArrayBuffer | Uint8Array): unknown {

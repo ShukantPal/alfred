@@ -1,6 +1,6 @@
 import { readDemoConfig, UsageError } from "./config";
 import { RecallClient } from "./recall/client";
-import { buildCreateBotPayload } from "./recall/bots";
+import { buildCreateBotPayload, buildScreenshareOutputMedia } from "./recall/bots";
 import { startCtlServer, type CtlServer } from "./server";
 import { startCloudflareTunnel, type CloudflareTunnel } from "./tunnel/cloudflare";
 
@@ -10,7 +10,36 @@ async function main() {
   let tunnel: CloudflareTunnel | undefined;
   let recall: RecallClient | undefined;
   let botId: string | undefined;
+  let publicBaseUrl: string | undefined = config.publicBaseUrl;
   let isShuttingDown = false;
+  let isStartingScreenshare = false;
+
+  const startScreenshare = async () => {
+    if (isStartingScreenshare) return;
+    if (!botId || !recall || !publicBaseUrl) {
+      console.warn("[demo] cannot start screenshare before the Recall bot is ready");
+      ctlServer?.broadcast({
+        type: "status",
+        message: "screenshare unavailable until bot is ready",
+      });
+      return;
+    }
+
+    isStartingScreenshare = true;
+    ctlServer?.broadcast({ type: "status", message: "starting screenshare" });
+
+    try {
+      await recall.startOutputMedia(botId, buildScreenshareOutputMedia(publicBaseUrl));
+      console.log(`[demo] Recall screenshare output media started: ${publicBaseUrl}/media/screen`);
+      ctlServer?.broadcast({ type: "status", message: "screenshare started" });
+    } catch (error) {
+      console.error("[demo] failed to start Recall screenshare output media");
+      console.error(error);
+      ctlServer?.broadcast({ type: "status", message: "screenshare failed" });
+    } finally {
+      isStartingScreenshare = false;
+    }
+  };
 
   const cleanup = async () => {
     if (botId && recall) {
@@ -42,10 +71,13 @@ async function main() {
   process.on("SIGTERM", shutdown);
 
   try {
-    ctlServer = startCtlServer(config.ctlHost, config.ctlPort);
+    ctlServer = startCtlServer(config.ctlHost, config.ctlPort, {
+      onStartScreenshare() {
+        void startScreenshare();
+      },
+    });
     console.log(`[demo] ctl server listening at ${ctlServer.localBaseUrl}`);
 
-    let publicBaseUrl = config.publicBaseUrl;
     if (!publicBaseUrl) {
       console.log("[demo] starting Cloudflare quick tunnel");
       tunnel = await startCloudflareTunnel({
