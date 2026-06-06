@@ -18,7 +18,8 @@ export function createRouter(options: CreateRouterOptions): Hono {
         recallWebSocket: "/ws/recall",
         mediaCamera: "/media/camera",
         mediaScreen: "/media/screen",
-        mediaApp: "/media/app.js",
+        mediaCameraApp: "/media/camera.js",
+        mediaScreenApp: "/media/screen.js",
       },
     }),
   );

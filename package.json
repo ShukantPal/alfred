@@ -13,6 +13,7 @@
     "typescript": "latest"
   },
   "dependencies": {
-    "hono": "^4.12.23"
+    "hono": "^4.12.23",
+    "lucide": "^1.17.0"
   }
 }
