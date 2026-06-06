@@ -1,12 +1,19 @@
 type MediaMode = "camera" | "screen";
 type MediaCommand =
   | { type: "status"; message?: string }
-  | { type: "say"; text?: string };
+  | { type: "speak_stream_start"; id: string; text: string; sampleRate: number }
+  | { type: "speak_stream_end"; id: string }
+  | { type: "speak_stream_error"; id: string; message: string };
+
+interface ActiveAudioStream {
+  id: string;
+  sampleRate: number;
+  nextPlaybackTime: number;
+}
 
 const mode = readMediaMode();
-const speechQueue: string[] = [];
-let isPlayingSpeech = false;
-let currentObjectUrl: string | undefined;
+let audioContext: AudioContext | undefined;
+let activeStream: ActiveAudioStream | undefined;
 
 document.title = mode === "camera" ? "Alfred" : "Alfred Control Plane";
 document.documentElement.style.colorScheme = "dark";
@@ -16,22 +23,34 @@ const root = requireElement("app");
 root.replaceChildren(renderApp(mode));
 
 const statusEl = requireElement("status");
-const speechAudio = requireElement("speech-audio") as HTMLAudioElement;
 const protocol = location.protocol === "https:" ? "wss" : "ws";
 const ws = new WebSocket(`${protocol}://${location.host}/ws/media`);
+ws.binaryType = "arraybuffer";
 
 ws.addEventListener("open", () => {
   statusEl.textContent = "connected";
 });
 
 ws.addEventListener("message", event => {
+  if (event.data instanceof ArrayBuffer) {
+    void handleStreamAudio(event.data);
+    return;
+  }
+
   try {
     const payload = JSON.parse(String(event.data)) as MediaCommand;
     if (payload.type === "status" && payload.message) {
       statusEl.textContent = payload.message;
     }
-    if (payload.type === "say" && payload.text) {
-      enqueueSpeech(payload.text);
+    if (payload.type === "speak_stream_start") {
+      void startAudioStream(payload);
+    }
+    if (payload.type === "speak_stream_end") {
+      endAudioStream(payload.id);
+    }
+    if (payload.type === "speak_stream_error") {
+      endAudioStream(payload.id);
+      statusEl.textContent = payload.message;
     }
   } catch {
     statusEl.textContent = String(event.data);
@@ -68,11 +87,6 @@ function renderApp(mediaMode: MediaMode): HTMLElement {
 
   main.append(mark, heading, copy);
 
-  const audio = document.createElement("audio");
-  audio.id = "speech-audio";
-  audio.preload = "auto";
-  audio.crossOrigin = "anonymous";
-
   const status = document.createElement("div");
   status.className = "status";
   const pulse = document.createElement("span");
@@ -82,78 +96,58 @@ function renderApp(mediaMode: MediaMode): HTMLElement {
   statusText.textContent = "connected";
   status.append(pulse, statusText);
 
-  fragment.append(main, audio, status);
+  fragment.append(main, status);
 
   const container = document.createElement("div");
   container.append(fragment);
   return container;
 }
 
-function enqueueSpeech(text: string): void {
-  const lastQueued = speechQueue[speechQueue.length - 1];
-  if (lastQueued === text) return;
-  speechQueue.push(text);
-  void drainSpeechQueue();
-}
-
-async function drainSpeechQueue(): Promise<void> {
-  if (isPlayingSpeech) return;
-  isPlayingSpeech = true;
-
-  try {
-    while (speechQueue.length > 0) {
-      const text = speechQueue.shift();
-      if (text) await say(text);
-    }
-  } finally {
-    isPlayingSpeech = false;
-  }
-}
-
-async function say(text: string): Promise<void> {
-  statusEl.textContent = text;
-  const source = `/tts?text=${encodeURIComponent(text)}`;
-
-  try {
-    const response = await fetch(`${source}&t=${Date.now()}`, { cache: "no-store" });
-    if (!response.ok) throw new Error(`TTS request failed: ${response.status}`);
-    const blob = await response.blob();
-    await playBlob(blob);
-  } catch (error) {
-    console.error("Failed to fetch speech audio", error);
-    try {
-      const fallback = await fetch(`/audio/hello.wav?t=${Date.now()}`, {
-        cache: "no-store",
-      });
-      await playBlob(await fallback.blob());
-    } catch (fallbackError) {
-      statusEl.textContent = "audio failed";
-      console.error("Failed to play fallback speech audio", fallbackError);
-    }
-  }
-}
-
-async function playBlob(blob: Blob): Promise<void> {
-  if (currentObjectUrl) {
-    URL.revokeObjectURL(currentObjectUrl);
-  }
-  currentObjectUrl = URL.createObjectURL(blob);
-  speechAudio.src = currentObjectUrl;
-  speechAudio.volume = 1;
-  speechAudio.onplaying = () => {
-    statusEl.textContent = "speaking";
+async function startAudioStream(command: Extract<MediaCommand, { type: "speak_stream_start" }>): Promise<void> {
+  audioContext ??= new AudioContext();
+  await audioContext.resume();
+  activeStream = {
+    id: command.id,
+    sampleRate: command.sampleRate,
+    nextPlaybackTime: audioContext.currentTime + 0.14,
   };
-  speechAudio.onended = () => {
-    statusEl.textContent = "listening";
-  };
+  statusEl.textContent = "speaking";
+}
 
-  await new Promise<void>((resolve, reject) => {
-    speechAudio.oncanplaythrough = () => resolve();
-    speechAudio.onerror = () => reject(new Error("audio element failed to load"));
-    speechAudio.load();
-  });
+async function handleStreamAudio(buffer: ArrayBuffer): Promise<void> {
+  if (!activeStream) return;
+  audioContext ??= new AudioContext();
+  await audioContext.resume();
 
-  await speechAudio.play();
+  const pcm = new Int16Array(buffer.slice(0, buffer.byteLength - (buffer.byteLength % 2)));
+  if (pcm.length === 0) return;
+
+  const audioBuffer = audioContext.createBuffer(1, pcm.length, activeStream.sampleRate);
+  const channel = audioBuffer.getChannelData(0);
+  for (let index = 0; index < pcm.length; index += 1) {
+    channel[index] = Math.max(-1, Math.min(1, pcm[index] / 32768));
+  }
+
+  const source = audioContext.createBufferSource();
+  source.buffer = audioBuffer;
+  source.connect(audioContext.destination);
+
+  const startAt = Math.max(activeStream.nextPlaybackTime, audioContext.currentTime + 0.02);
+  source.start(startAt);
+  activeStream.nextPlaybackTime = startAt + audioBuffer.duration;
+}
+
+function endAudioStream(id: string): void {
+  if (!activeStream || activeStream.id !== id) return;
+  const remainingMs = audioContext
+    ? Math.max(0, (activeStream.nextPlaybackTime - audioContext.currentTime) * 1000)
+    : 0;
+  activeStream = undefined;
+  window.setTimeout(() => {
+    if (!activeStream) {
+      statusEl.textContent = "listening";
+    }
+  }, remainingMs + 100);
 }
 
 function requireElement(id: string): HTMLElement {

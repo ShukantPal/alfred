@@ -15,17 +15,28 @@ interface WebSocketData {
   path: string;
 }
 
+type MediaSocket = ServerWebSocket<WebSocketData>;
+type MediaCommand =
+  | { type: "status"; message?: string }
+  | { type: "say"; text?: string }
+  | { type: "speak_stream_start"; id: string; text: string; sampleRate: number }
+  | { type: "speak_stream_end"; id: string }
+  | { type: "speak_stream_error"; id: string; message: string };
+
 export function startCtlServer(hostname: string, port: number): CtlServer {
   const sockets = new Set<ServerWebSocket<WebSocketData>>();
   const audioLog = createAudioChunkLogger(30_000);
   const tts = createDeepgramTtsFromEnv(process.env);
-  const broadcast = (message: unknown) => {
-    const serialized = JSON.stringify(message);
-    for (const socket of sockets) {
-      if (socket.data.path === "/ws/media") {
-        socket.send(serialized);
-      }
+  const speechStreamer = createSpeechStreamer({
+    tts,
+    getMediaSockets: () => [...sockets].filter(socket => socket.data.path === "/ws/media"),
+  });
+  const broadcast = (message: MediaCommand) => {
+    if (message.type === "say" && message.text) {
+      speechStreamer.enqueue(message.text);
+      return;
     }
+    sendMediaJson(sockets, message);
   };
   const transcripts = createTranscriptResponder({ broadcast });
   const stt = createDeepgramSttFromEnv(process.env, payload =>
@@ -37,7 +48,6 @@ export function startCtlServer(hostname: string, port: number): CtlServer {
     console.log("[ctl] Deepgram realtime STT disabled");
   }
   const router = createRouter({
-    tts,
     onRecallWebhook: payload => transcripts.handle(payload, "webhook"),
   });
 
@@ -101,6 +111,102 @@ export function startCtlServer(hostname: string, port: number): CtlServer {
     },
     broadcast,
   };
+}
+
+function createSpeechStreamer(options: {
+  tts: ReturnType<typeof createDeepgramTtsFromEnv>;
+  getMediaSockets(): MediaSocket[];
+}) {
+  const queue: string[] = [];
+  let isStreaming = false;
+
+  const drain = async () => {
+    if (isStreaming) return;
+    isStreaming = true;
+
+    try {
+      while (queue.length > 0) {
+        const text = queue.shift();
+        if (text) await streamSpeech(text, options);
+      }
+    } finally {
+      isStreaming = false;
+    }
+  };
+
+  return {
+    enqueue(text: string) {
+      const lastQueued = queue[queue.length - 1];
+      if (lastQueued === text) return;
+      queue.push(text);
+      void drain();
+    },
+  };
+}
+
+async function streamSpeech(
+  text: string,
+  options: {
+    tts: ReturnType<typeof createDeepgramTtsFromEnv>;
+    getMediaSockets(): MediaSocket[];
+  },
+): Promise<void> {
+  if (!options.tts.enabled) {
+    sendMediaJsonToSockets(options.getMediaSockets(), {
+      type: "status",
+      message: "Deepgram TTS unavailable",
+    });
+    return;
+  }
+
+  const id = crypto.randomUUID();
+  const sockets = options.getMediaSockets();
+  if (sockets.length === 0) return;
+
+  sendMediaJsonToSockets(sockets, {
+    type: "speak_stream_start",
+    id,
+    text,
+    sampleRate: options.tts.streamingSampleRate,
+  });
+
+  try {
+    console.log(`[ctl] streaming TTS start id=${id}`);
+    await options.tts.stream(text, {
+      onAudio(audio) {
+        for (const socket of options.getMediaSockets()) {
+          socket.send(audio.bytes);
+        }
+      },
+    });
+    sendMediaJsonToSockets(options.getMediaSockets(), { type: "speak_stream_end", id });
+    console.log(`[ctl] streaming TTS end id=${id}`);
+  } catch (error) {
+    console.error("[ctl] streaming TTS failed", error);
+    sendMediaJsonToSockets(options.getMediaSockets(), {
+      type: "speak_stream_error",
+      id,
+      message: "streaming TTS failed",
+    });
+    sendMediaJsonToSockets(options.getMediaSockets(), {
+      type: "status",
+      message: "audio failed",
+    });
+  }
+}
+
+function sendMediaJson(sockets: Set<MediaSocket>, message: MediaCommand): void {
+  sendMediaJsonToSockets(
+    [...sockets].filter(socket => socket.data.path === "/ws/media"),
+    message,
+  );
+}
+
+function sendMediaJsonToSockets(sockets: MediaSocket[], message: MediaCommand): void {
+  const serialized = JSON.stringify(message);
+  for (const socket of sockets) {
+    socket.send(serialized);
+  }
 }
 
 function stringifyMessage(message: string | ArrayBuffer | Uint8Array): string {
