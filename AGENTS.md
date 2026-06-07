@@ -138,8 +138,8 @@ catch-up buffer because the highlight state is inherently live and reset every t
   `{op:"highlight", target}`) and is mirrored in `agui/lib/panel.ts`.
 - ctl broadcasts `{ type:"panel", event }` over `/ws/notes` via `broadcastPanelToNotes`
   (`ctl/src/server.ts`). Triggers: `onPanelSignal` on the Realtime client emits `clear` at the start
- of each addressed turn and `highlight target:"notes"` on `show_meeting_notes`; the action-item
- handlers emit `highlight target:"tasks"`; and `delegate.onToolUse` maps each MCP tool
+  of each addressed turn and `highlight target:"notes"` on `show_meeting_notes`; the action-item
+  handlers emit `highlight target:"tasks"`; and `delegate.onToolUse` maps each MCP tool
   name to integration rows via `panelTargetsForTool` and emits `highlight` for each.
 - agui consumes the frames in `ChatWatcher` (`type:"panel"`) and stores the lit set in
   `PanelSignalProvider` (`usePanelSignals`), which `AlfredSidePanel` reads. `clear` empties the set.
