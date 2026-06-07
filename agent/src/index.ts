@@ -6,6 +6,7 @@ export type {
   ActionItemStatus,
   CompanyDelegate,
   CompanyDelegateRequest,
+  MeetingNotesRequest,
   VisualChartSpec,
   VisualKind,
   VisualPoint,

@@ -5,7 +5,7 @@ import { z } from "zod";
 // field is the discriminant the chart renderer switches on; Alfred (Talon) decides
 // which kind best represents the answer.
 
-export type VisualKind = "pie" | "bar" | "line" | "table" | "text";
+export type VisualKind = "pie" | "bar" | "line" | "table" | "text" | "quote" | "mermaid";
 
 export interface VisualPoint {
   label: string;
@@ -34,7 +34,28 @@ export interface VisualTextSpec {
   text: string;
 }
 
-export type VisualSpec = VisualChartSpec | VisualTableSpec | VisualTextSpec;
+export interface VisualQuoteSpec {
+  kind: "quote";
+  text: string;
+  attribution: string;
+  source?: string;
+  url?: string;
+  title?: string;
+}
+
+export interface VisualMermaidSpec {
+  kind: "mermaid";
+  title: string;
+  subtitle?: string;
+  diagram: string;
+}
+
+export type VisualSpec =
+  | VisualChartSpec
+  | VisualTableSpec
+  | VisualTextSpec
+  | VisualQuoteSpec
+  | VisualMermaidSpec;
 
 const pointSchema = z.object({
   label: z.string(),
@@ -44,7 +65,7 @@ const pointSchema = z.object({
 // Zod schema for CopilotKit's `useRenderTool` parameters. The agent calls
 // `render_chart` with a VisualSpec-shaped argument; this validates/types the props.
 export const visualSpecSchema = z.object({
-  kind: z.enum(["pie", "bar", "line", "table", "text"]),
+  kind: z.enum(["pie", "bar", "line", "table", "text", "quote", "mermaid"]),
   title: z.string().optional(),
   subtitle: z.string().optional(),
   unit: z.string().optional(),
@@ -52,6 +73,10 @@ export const visualSpecSchema = z.object({
   columns: z.array(z.string()).optional(),
   rows: z.array(z.array(z.union([z.string(), z.number()]))).optional(),
   text: z.string().optional(),
+  attribution: z.string().optional(),
+  source: z.string().optional(),
+  url: z.string().optional(),
+  diagram: z.string().optional(),
 });
 
 export type VisualSpecParams = z.infer<typeof visualSpecSchema>;
@@ -76,6 +101,22 @@ export function toVisualSpec(params: VisualSpecParams): VisualSpec {
         subtitle: params.subtitle,
         columns: params.columns ?? [],
         rows: params.rows ?? [],
+      };
+    case "quote":
+      return {
+        kind: "quote",
+        title: params.title,
+        text: params.text ?? "",
+        attribution: params.attribution ?? "Unknown",
+        source: params.source,
+        url: params.url,
+      };
+    case "mermaid":
+      return {
+        kind: "mermaid",
+        title: params.title ?? "Untitled",
+        subtitle: params.subtitle,
+        diagram: params.diagram ?? "",
       };
     case "text":
     default:

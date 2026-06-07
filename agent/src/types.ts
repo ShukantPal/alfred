@@ -21,6 +21,12 @@ export interface ActionItemsRequest {
   transcript: string;
 }
 
+export interface MeetingNotesRequest {
+  meetingId: string;
+  /** The full meeting transcript, formatted as "Speaker: text" lines. */
+  transcript: string;
+}
+
 export interface ActionItemMatch {
   id: string;
   title: string;
@@ -36,7 +42,7 @@ export interface ActionItemMatchRequest {
 }
 
 /** The visual representations Alfred can choose from when answering with UI. */
-export type VisualKind = "pie" | "bar" | "line" | "table" | "text";
+export type VisualKind = "pie" | "bar" | "line" | "table" | "text" | "quote" | "mermaid";
 
 /** A single labelled datapoint shared by pie/bar/line charts. */
 export interface VisualPoint {
@@ -69,12 +75,41 @@ export interface VisualTextSpec {
   text: string;
 }
 
+/** A stylized quote bubble for a colleague's words from docs, Slack, or notes. */
+export interface VisualQuoteSpec {
+  kind: "quote";
+  /** The quoted passage (may include line breaks). */
+  text: string;
+  /** Who said or wrote it (e.g. a colleague's name). */
+  attribution: string;
+  /** Optional source label (e.g. "GitHub · acme-corp/alfred"). */
+  source?: string;
+  /** Optional link back to the source (e.g. a GitHub file URL from company memory). */
+  url?: string;
+  /** Optional heading above the bubble. */
+  title?: string;
+}
+
+/** A Mermaid diagram for architecture, data flow, or sequence explanations. */
+export interface VisualMermaidSpec {
+  kind: "mermaid";
+  title: string;
+  subtitle?: string;
+  /** Mermaid diagram source (flowchart, sequenceDiagram, etc.). */
+  diagram: string;
+}
+
 /**
  * A self-describing UI spec produced by Alfred. The `kind` field is the
  * discriminant CopilotKit's renderer switches on; Alfred decides which kind
  * best represents the answer.
  */
-export type VisualSpec = VisualChartSpec | VisualTableSpec | VisualTextSpec;
+export type VisualSpec =
+  | VisualChartSpec
+  | VisualTableSpec
+  | VisualTextSpec
+  | VisualQuoteSpec
+  | VisualMermaidSpec;
 
 export interface VisualRequest {
   meetingId: string;
@@ -97,6 +132,8 @@ export type ToolUseListener = (event: ToolUseEvent) => void;
 
 export interface CompanyDelegate {
   ask(request: CompanyDelegateRequest): Promise<string>;
+  /** Update meeting-note bullets from the full transcript and previous bullets. */
+  updateMeetingNotes(request: MeetingNotesRequest): Promise<string[]>;
   /**
    * Transform a full meeting transcript into structured action items. Runs as a
    * Weave-instrumented subagent node so it shows in the delegation tree.

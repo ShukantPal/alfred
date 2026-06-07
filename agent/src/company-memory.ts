@@ -1,4 +1,20 @@
-export type CompanyMemorySource = "gdoc" | "slack" | "project" | "drive";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+export type CompanyMemorySource = "gdoc" | "slack" | "project" | "drive" | "github";
+
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "../..");
+const SHUKANT_NOTES_PATH = join(REPO_ROOT, "agui/public/shukant-notes.md");
+
+function loadShukantNotes(): string {
+  try {
+    return readFileSync(SHUKANT_NOTES_PATH, "utf8").trim();
+  } catch (error) {
+    console.warn("[agent] could not load agui/public/shukant-notes.md", error);
+    return "Shukant's CopilotKit ↔ Recall integration notes are unavailable.";
+  }
+}
 
 export interface CompanyMemoryDoc {
   id: string;
@@ -146,6 +162,14 @@ export const COMPANY_MEMORY_DOCS: CompanyMemoryDoc[] = [
       "Q3 priorities: (1) onboarding redesign, (2) billing/Stripe migration, (3) mobile app beta. " +
       "Onboarding and billing are must-ship; mobile beta is best-effort. Owners: Priya (onboarding), " +
       "Marco (billing), Aisha (mobile).",
+  },
+  {
+    id: "shukant-notes",
+    source: "github",
+    title: "CopilotKit ↔ Recall.ai integration notes",
+    owner: "Shukant",
+    url: "https://github.com/acme-corp/alfred/blob/main/agui/public/shukant-notes.md",
+    text: loadShukantNotes(),
   },
 ];
 

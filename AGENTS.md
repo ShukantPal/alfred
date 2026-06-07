@@ -60,11 +60,15 @@ context. Redis remains the intended production memory layer via an external comp
 - `CompanyDelegate.ready()` starts Talon, configures the namespace/agent, and attaches MCPs.
 - `CompanyDelegate.ask({ meetingId, speaker, question })` sends one delegated question to a
  meeting-scoped Talon session and returns the answer text.
+- `CompanyDelegate.updateMeetingNotes({ meetingId, transcript })` runs a meeting-notes subagent
+ (its own `weave.op` node, `alfred.talon.meetingNotes`) that summarizes the full retained meeting
+ transcript into bullet points. ctl surfaces the returned bullets in the chat pane from the voice
+ model's `show_meeting_notes` tool path.
 - `CompanyDelegate.extractActionItems({ meetingId, transcript })` runs an end-of-meeting subagent
  (its own `weave.op` node, `alfred.talon.actionItems`) that transforms the full meeting transcript
  into structured `ActionItem[]` (`{ title, assignee, status }`). ctl retains the transcript and
  calls this from the voice model's `create_action_items` tool path, then POSTs the items to agui
- (`/api/meeting/tasks`) for live display in the screenshare "Action Items" panel.
+ (`/api/meeting/tasks`) and surfaces them in the chat pane as a left-aligned bullet list.
 - `CompanyDelegate.matchActionItemForRemoval({ meetingId, query, items })` runs a subagent
  (its own `weave.op` node, `alfred.talon.matchActionItem`) that resolves which existing item a
  spoken removal request refers to (handles paraphrase/synonyms) and returns the matching item id
@@ -74,7 +78,7 @@ context. Redis remains the intended production memory layer via an external comp
   `alfred.talon.buildVisual`) that retrieves the relevant company data via the general memory tools
   (`company_memory_search` / `company_memory_get`, which surface any doc's structured `data` payload)
   and **chooses the representation**, returning a `VisualSpec`
-  (discriminated union: `pie | bar | line | table | text`). It is invoked from agui's CopilotKit
+  (discriminated union: `pie | bar | line | table | text | quote | mermaid`). It is invoked from agui's CopilotKit
   Talon-bridge agent over ctl's `/api/visual` HTTP endpoint, not from a ctl voice tool directly (see
   "Voice-driven generative UI" below). `VisualSpec` is the ctl/agent contract type (mirrored in
   `agui/lib/visual.ts`).
@@ -88,8 +92,9 @@ context. Redis remains the intended production memory layer via an external comp
 KEY RULE: ctl decides when the voice model may respond. ctl performs wake-word/address detection
 and the Realtime model only delegates after an addressed turn. agent/ is only called from the
 voice model's `delegate_to_company_agent` tool path (company-memory Q&A), the
-`create_action_items` tool path (end-of-meeting action items), or `buildVisual` (generative UI,
-reached via agui's bridge agent -> ctl `/api/visual`).
+`show_meeting_notes` tool path (meeting notes), the `create_action_items` tool path
+(end-of-meeting action items), or `buildVisual` (generative UI, reached via agui's bridge agent ->
+ctl `/api/visual`).
 
 The voice model can also edit the action-items list via the `add_action_item` and
 `remove_action_item` tools. `add_action_item` is a deterministic ctl-side mutation (no Talon): ctl
@@ -99,15 +104,21 @@ phrase means, then removes by id (`{ op: "remove", id }`). agui retains a lenien
 `{ op: "remove", title }` path as a fallback only.
 
 ## Screenshare chat mode (ctl -> agui `/api/meeting/chat`)
-When the voice model calls `delegate_to_company_agent`, ctl forwards the Q&A to the agui screenshare
-surface so the main window transitions from the `AlfredLanding` view into a chat view (user questions
-as right-aligned text bubbles, Alfred's spoken reply as a left-aligned animated waveform). This is a
+When the voice model calls `delegate_to_company_agent`, `show_meeting_notes`, or any action-item tool
+(`create_action_items`, `add_action_item`, `remove_action_item`), ctl forwards the turn to the agui
+screenshare surface so the main window transitions from the `AlfredLanding` view into a chat view
+(user questions as right-aligned text bubbles, Alfred's spoken reply as a left-aligned animated
+waveform, meeting notes as left-aligned text bullets, and action items as a left-aligned task list).
+Chat forwarding is a
 DETERMINISTIC side-effect of the already-delegated path, so it is a plain ctl-side POST and is NOT
-wrapped in `weave.op` (no new reasoning, no new voice tool). Mechanism:
+wrapped in `weave.op` (no new reasoning beyond the delegate method itself). Mechanism:
 - ctl emits `ChatMessageEvent`s via the `onChatMessage` callback on the Realtime voice client
   (`ctl/src/realtime/openai.ts`): on delegate it adds `{ op:"add", role:"user", kind:"text", text }`
   and `{ op:"add", id, role:"alfred", kind:"voice", status:"speaking" }`, then settles the waveform
   with `{ op:"update", id, status:"done" }` when the spoken answer's `response.done` fires.
+  On meeting notes, ctl adds the user prompt and then an Alfred text bubble containing the updated
+  bullet list. On action items, ctl adds the user prompt and then an Alfred text bubble containing
+  the current task list (after create, add, or remove).
 - `ctl/src/server.ts` forwards each event over the `/ws/notes` WebSocket (`{ type:"chat", event }`)
   for instant rendering and POSTs it to agui's `/api/meeting/chat` (the source of truth for catch-up
   polling), mirroring the transcript/tasks transport.
@@ -127,13 +138,11 @@ catch-up buffer because the highlight state is inherently live and reset every t
   `{op:"highlight", target}`) and is mirrored in `agui/lib/panel.ts`.
 - ctl broadcasts `{ type:"panel", event }` over `/ws/notes` via `broadcastPanelToNotes`
   (`ctl/src/server.ts`). Triggers: `onPanelSignal` on the Realtime client emits `clear` at the start
-  of each addressed turn and `highlight target:"notes"` on `delegate_to_company_agent`; the
-  action-item handlers emit `highlight target:"tasks"`; and `delegate.onToolUse` maps each MCP tool
+ of each addressed turn and `highlight target:"notes"` on `show_meeting_notes`; the action-item
+ handlers emit `highlight target:"tasks"`; and `delegate.onToolUse` maps each MCP tool
   name to integration rows via `panelTargetsForTool` and emits `highlight` for each.
 - agui consumes the frames in `ChatWatcher` (`type:"panel"`) and stores the lit set in
   `PanelSignalProvider` (`usePanelSignals`), which `AlfredSidePanel` reads. `clear` empties the set.
-- The `MeetingNotesPanel` / `TasksPanel` components are intentionally retained (not deleted);
-  rendering their content in the chat window is a follow-up PR.
 
 ## Voice-driven generative UI (CopilotKit/AG-UI, headless)
 When a participant asks Alfred to show/visualize/chart company data, Alfred renders an
@@ -173,12 +182,13 @@ or delegated. Classify every new tool before building it:
   to observe.
 - **Delegated tool** — its work *is* open-ended reasoning over fuzzy input such as a free-form
   question, a whole transcript, mapping a paraphrased phrase to an existing item, or deciding how to
-  visualize data (e.g. `delegate_to_company_agent`, `create_action_items`, `remove_action_item`,
-  `render_visual`). This needs a second LLM, so it MUST go through a `CompanyDelegate` method in
-  `agent/` (Talon), and that method MUST be wrapped in a `weave.op` so it shows in the Weave
-  delegation tree. Talon is also where MCP tools (company-memory, Google Workspace, DuckDuckGo) are
-  available. Note `render_visual` reaches Talon indirectly: the ctl tool triggers an agui CopilotKit
-  run, and the agui bridge agent calls ctl `/api/visual` -> `buildVisual` (the `weave.op`).
+  visualize data (e.g. `delegate_to_company_agent`, `show_meeting_notes`, `create_action_items`,
+  `remove_action_item`, `render_visual`). This needs a second LLM, so it MUST go through a
+  `CompanyDelegate` method in `agent/` (Talon), and that method MUST be wrapped in a `weave.op` so
+  it shows in the Weave delegation tree. Talon is also where MCP tools (company-memory, Google
+  Workspace, DuckDuckGo) are available. Note `render_visual` reaches Talon indirectly: the ctl tool
+  triggers an agui CopilotKit run, and the agui bridge agent calls ctl `/api/visual` ->
+  `buildVisual` (the `weave.op`).
 
 Rule of thumb: if you would need an LLM to decide the *result*, it is delegated (Talon + Weave).
 If the result is a mechanical mutation/side effect, it is deterministic (ctl only).

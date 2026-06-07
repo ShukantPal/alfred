@@ -1,4 +1,4 @@
-/** A single final meeting utterance, forwarded to agui for live meeting notes. */
+/** A single final meeting utterance retained by ctl for transcript-derived features. */
 export interface MeetingUtterance {
   text: string;
   speaker: string;

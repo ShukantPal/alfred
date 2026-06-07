@@ -6,7 +6,7 @@ import { startCloudflareTunnel } from "./tunnel/cloudflare";
 export interface AguiScreenshareServer {
   /** Public base URL the agui app is reachable at. */
   publicBaseUrl: string;
-  /** Local URL ctl uses to POST transcripts (same machine, no tunnel). */
+  /** Local URL ctl uses to POST chat/tasks/config (same machine, no tunnel). */
   localBaseUrl: string;
   /** Full public URL Recall should render as the screenshare. */
   screenshareUrl: string;
@@ -66,17 +66,10 @@ export async function startAguiScreenshareServer(
   let localBaseUrl = `http://127.0.0.1:${port}`;
   const readyUrl = `${localBaseUrl}${path}`;
 
-  const reusable =
-    (await probeAgui(readyUrl)) && (await probeTranscriptRoute(localBaseUrl));
+  const reusable = await probeAgui(readyUrl);
   if (reusable) {
     console.log(`[agui] reusing existing Next server at ${readyUrl}`);
   } else {
-    if (await probeAgui(readyUrl)) {
-      console.warn(
-        `[agui] existing server at ${readyUrl} is missing the meeting-notes route; ` +
-          "starting a fresh server (stop the stale dev server to free the default port).",
-      );
-    }
     const started = await spawnNextAndWait({
       nextBin,
       aguiDir: options.aguiDir,
@@ -126,27 +119,6 @@ async function probeAgui(url: string): Promise<boolean> {
     return response.ok;
   } catch {
     return false;
-  }
-}
-
-// A reused server is only useful if it serves the meeting-notes transcript route.
-// Stale dev servers started before that route existed answer /screenshare with 200
-// but 404 the transcript endpoint, silently dropping every forwarded utterance.
-async function probeTranscriptRoute(localBaseUrl: string): Promise<boolean> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 5_000);
-  try {
-    const response = await fetch(`${localBaseUrl}/api/meeting/transcript`, {
-      method: "GET",
-      headers: { Accept: "text/event-stream" },
-      signal: controller.signal,
-    });
-    return response.status !== 404;
-  } catch {
-    return false;
-  } finally {
-    clearTimeout(timeout);
-    controller.abort();
   }
 }
 

@@ -20,6 +20,7 @@ import type {
   ActionItemStatus,
   CompanyDelegate,
   CompanyDelegateRequest,
+  MeetingNotesRequest,
   ToolUseListener,
   VisualPoint,
   VisualRequest,
@@ -82,6 +83,7 @@ export class TalonCompanyDelegate implements CompanyDelegate {
   private readonly startRuntimeOp: () => Promise<TalonRuntime>;
   private readonly bootstrapOp: (runtime: TalonRuntime) => Promise<void>;
   private readonly askOp: (request: CompanyDelegateRequest) => Promise<string>;
+  private readonly meetingNotesOp: (request: MeetingNotesRequest) => Promise<string[]>;
   private readonly actionItemsOp: (request: ActionItemsRequest) => Promise<ActionItem[]>;
   private readonly matchActionItemOp: (request: ActionItemMatchRequest) => Promise<string | null>;
   private readonly buildVisualOp: (request: VisualRequest) => Promise<VisualSpec>;
@@ -112,6 +114,10 @@ export class TalonCompanyDelegate implements CompanyDelegate {
     this.askOp = weave.op(this, this.askRuntime, {
       name: "alfred.talon.ask",
       summarize: answer => ({ answerChars: answer.length }),
+    });
+    this.meetingNotesOp = weave.op(this, this.meetingNotesRuntime, {
+      name: "alfred.talon.meetingNotes",
+      summarize: notes => ({ noteCount: notes.length }),
     });
     this.actionItemsOp = weave.op(this, this.actionItemsRuntime, {
       name: "alfred.talon.actionItems",
@@ -199,6 +205,75 @@ export class TalonCompanyDelegate implements CompanyDelegate {
         "Talon company agent timed out.",
       );
       return answer.trim() || "The Talon company agent returned no answer.";
+    } finally {
+      streamController.abort();
+      void answerPromise?.catch(() => undefined);
+    }
+  }
+
+  async updateMeetingNotes(request: MeetingNotesRequest): Promise<string[]> {
+    if (!request.transcript.trim()) return [];
+    await this.ensureWeave();
+    return this.meetingNotesOp(request);
+  }
+
+  private async meetingNotesRuntime(request: MeetingNotesRequest): Promise<string[]> {
+    const runtime = await this.ensureRuntime();
+    const channel = await this.channelForMeeting(runtime, {
+      meetingId: request.meetingId,
+      speaker: { id: "alfred", displayName: "Alfred" },
+      question: "",
+    });
+    const requestId = crypto.randomUUID();
+    const streamController = new AbortController();
+    let answerPromise: Promise<string> | undefined;
+
+    try {
+      const response = await runtime.client.postChannelMessage(
+        new gateway.PostChannelMessageRequest({
+          ns: this.options.namespace,
+          channel,
+          authorKind: "user",
+          author: "Alfred",
+          content: meetingNotesUpdatePrompt(request),
+          subscriptionNames: [CHANNEL_REPLY_SUBSCRIPTION],
+          labels: {
+            requestId,
+            meetingId: request.meetingId,
+            kind: "meeting-notes",
+          },
+        }),
+      );
+      const routed = response.routedSessions.find(
+        session => session.subscription === CHANNEL_REPLY_SUBSCRIPTION,
+      );
+      if (!routed || routed.error || !routed.sessionId) {
+        throw new Error(
+          routed?.error || "Talon channel did not route meeting-note update to the delegate.",
+        );
+      }
+      console.log(
+        `[agent] Talon meeting notes routed request=${requestId} channel=${channel} session=${routed.sessionId}`,
+      );
+
+      answerPromise = collectTalonAnswer(
+        runtime.client.streamSessionParts(
+          new gateway.StreamSessionPartsRequest({
+            ns: this.options.namespace,
+            agent: this.options.agentName,
+            sessionId: routed.sessionId,
+          }),
+          { signal: streamController.signal, timeoutMs: 0 },
+        ),
+        this.toolUseCollector(request.meetingId),
+      );
+
+      const answer = await withTimeout(
+        answerPromise,
+        this.options.timeoutMs,
+        "Talon meeting-note update timed out.",
+      );
+      return parseMeetingNotes(answer);
     } finally {
       streamController.abort();
       void answerPromise?.catch(() => undefined);
@@ -850,15 +925,17 @@ async function collectTalonAnswer(
       throw new Error(content || "Talon company agent stream failed.");
     }
     logSessionPartEvent(event);
-    // Surface each resolved tool call so the caller can map it to a live UI
-    // integration highlight. DONE keeps it to one signal per call (not per delta).
+    // Surface each resolved tool-related part so the caller can map it to a live
+    // UI integration highlight. DONE keeps it to one signal per call (not per delta).
     if (
       onTool &&
       event.kind === events.SessionMessagePartEventKind.DONE &&
-      part?.partType === models.SessionMessagePartType.TOOL_CALL &&
-      part.name
+      part &&
+      part.partType !== models.SessionMessagePartType.TEXT
     ) {
-      onTool(part.name);
+      for (const toolName of toolNamesForPart(part)) {
+        onTool(toolName);
+      }
     }
     if (part?.partType !== models.SessionMessagePartType.TEXT) {
       continue;
@@ -915,6 +992,70 @@ function logSessionPartEvent(event: events.SessionMessagePartEvent): void {
   );
 }
 
+function toolNamesForPart(part: models.SessionMessagePart): string[] {
+  const names = new Set<string>();
+  addToolName(names, part.name);
+
+  // Some Talon/MCP tool-call parts put the function name in the serialized
+  // payload rather than `part.name`; include those strings so ctl can map
+  // integration highlights like DuckDuckGo reliably.
+  for (const value of [part.payloadJson, part.content]) {
+    addToolName(names, value);
+    collectToolNamesFromJson(names, value);
+  }
+
+  return [...names];
+}
+
+function addToolName(names: Set<string>, value: unknown): void {
+  if (typeof value !== "string") return;
+  const trimmed = value.trim();
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) return;
+  if (trimmed.length > 120 || trimmed.includes("\n")) return;
+  if (trimmed) names.add(trimmed);
+}
+
+function collectToolNamesFromJson(names: Set<string>, value: string): void {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return;
+  }
+  collectToolNamesFromValue(names, parsed);
+}
+
+function collectToolNamesFromValue(names: Set<string>, value: unknown): void {
+  if (!value || typeof value !== "object") return;
+  if (Array.isArray(value)) {
+    for (const item of value) collectToolNamesFromValue(names, item);
+    return;
+  }
+
+  const record = value as Record<string, unknown>;
+  for (const key of [
+    "name",
+    "tool",
+    "toolName",
+    "function",
+    "functionName",
+    "server",
+    "serverName",
+    "server_name",
+    "mcpServer",
+    "mcp_server",
+  ]) {
+    addToolName(names, record[key]);
+  }
+  const fn = record.function;
+  if (fn && typeof fn === "object") {
+    addToolName(names, (fn as Record<string, unknown>).name);
+  }
+  for (const nested of Object.values(record)) {
+    collectToolNamesFromValue(names, nested);
+  }
+}
+
 function sessionPartTypeName(value: models.SessionMessagePartType): string {
   return models.SessionMessagePartType[value] ?? `part_${value}`;
 }
@@ -953,6 +1094,60 @@ Never send emails, Slack messages, GitHub comments, GitHub reviews, edit documen
 When this session is triggered by a Talon channel, still write the final concise answer as normal assistant text. Alfred reads the routed session output directly. If channel_publish is available, do not rely on it as the only answer.
 
 Return a concise, grounded answer for the voice model to speak. Include the relevant source or owner when available. If context is missing, say so plainly.`;
+}
+
+function meetingNotesUpdatePrompt(request: MeetingNotesRequest): string {
+  return [
+    "You are maintaining Alfred's meeting notes.",
+    "The notes are shown only when a participant asks for them. Read the full transcript and",
+    "produce a useful recap as concise bullets.",
+    "",
+    "Rules:",
+    "- Prefer 4-10 bullets when the transcript has enough substance.",
+    "- A bullet does not need to be a final decision: include useful context, progress updates, open questions, options discussed, risks, concerns, assumptions, follow-ups mentioned in passing, and noteworthy rationale.",
+    "- Merge repetitive chatter, but err on the side of capturing a useful point if it would help someone catch up later.",
+    "- Do not create a bullet for the request to Alfred to show, generate, summarize, recap, or update meeting notes; that request is a control utterance, not meeting content.",
+    "- Skip pure small talk, filler, transcription artifacts, and unsupported inferences.",
+    "- Include speaker names only when ownership, stance, or source matters.",
+    "",
+    "Full transcript:",
+    request.transcript,
+    "",
+    "Respond with ONLY a JSON array of strings, where each string is one bullet without a leading dash.",
+  ].join("\n");
+}
+
+function parseMeetingNotes(answer: string): string[] {
+  const json = extractJsonArray(answer);
+  if (!json) return [];
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+
+  return normalizeMeetingNotes(parsed);
+}
+
+function normalizeMeetingNotes(values: unknown[]): string[] {
+  const notes: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    if (typeof value !== "string") continue;
+    const note = value
+      .trim()
+      .replace(/^[-*\u2022]\s*/, "")
+      .replace(/\s+/g, " ");
+    if (!note) continue;
+    const key = note.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    notes.push(note);
+  }
+  return notes.slice(0, 10);
 }
 
 function actionItemsExtractionPrompt(transcript: string): string {
@@ -1055,14 +1250,29 @@ function visualBuildPrompt(question: string): string {
     '- "line": a trend over an ordered sequence (e.g. net income over quarters).',
     '- "table": multiple columns of values that do not chart cleanly.',
     '- "text": a short factual answer with no useful chart.',
+    '- "quote": a key passage from company memory (GitHub, Slack, docs) shown verbatim. ' +
+      'Use when the request asks what someone said or to pull up their exact words.',
+    '- "mermaid": an architecture or data-flow diagram as Mermaid source. Use when the request ' +
+      'asks for a diagram, flow, architecture, sequence, or how components connect — especially ' +
+      'for integrations like CopilotKit and Recall.',
     "",
     "Respond with ONLY a JSON object (no prose, no markdown fences) matching exactly one of:",
     '{"kind":"pie"|"bar"|"line","title":string,"subtitle"?:string,"unit"?:string,"series":[{"label":string,"value":number}]}',
     '{"kind":"table","title":string,"subtitle"?:string,"columns":string[],"rows":(string|number)[][]}',
     '{"kind":"text","title"?:string,"text":string}',
+    '{"kind":"quote","title"?:string,"text":string,"attribution":string,"source"?:string,"url"?:string}',
+    '{"kind":"mermaid","title":string,"subtitle"?:string,"diagram":string}',
     "",
     "Rules: numeric values must be plain numbers (no commas, currency symbols, or units in the number).",
     'Put any currency/unit hint in "unit" (e.g. "$"). Keep the title short. Prefer 2-8 data points.',
+    'For quote: "text" is the verbatim passage (1-4 sentences from tool results, not invented).',
+    '"attribution" is the colleague name (doc owner).',
+    '"source" labels the origin — e.g. "GitHub · acme-corp/alfred" for github docs, or the doc title.',
+    '"url" is the memory doc URL when available (required for GitHub sources).',
+    'For Shukant / CopilotKit / Recall questions, use doc id "shukant-notes".',
+    'Choose "mermaid" for diagram/flow/architecture asks; choose "quote" for verbatim words.',
+    'For mermaid: "diagram" is valid Mermaid syntax (flowchart LR/TB or sequenceDiagram).',
+    "Keep diagrams to 6-10 nodes max. Base labels on tool results — do not invent components.",
   ].join("\n");
 }
 
@@ -1141,6 +1351,31 @@ function parseVisualSpec(answer: string): VisualSpec {
     const text = readSpecString(record.text);
     if (!text) return fallback;
     return { kind: "text", title: optionalSpecString(record.title), text };
+  }
+
+  if (kind === "quote") {
+    const text = readSpecString(record.text);
+    const attribution = readSpecString(record.attribution);
+    if (!text || !attribution) return fallback;
+    return {
+      kind: "quote",
+      title: optionalSpecString(record.title),
+      text,
+      attribution,
+      source: optionalSpecString(record.source),
+      url: optionalSpecString(record.url),
+    };
+  }
+
+  if (kind === "mermaid") {
+    const diagram = readSpecString(record.diagram);
+    if (!diagram) return fallback;
+    return {
+      kind: "mermaid",
+      title: readSpecString(record.title) || "Untitled",
+      subtitle: optionalSpecString(record.subtitle),
+      diagram,
+    };
   }
 
   return fallback;

@@ -9,7 +9,9 @@ import { useVisualAgent } from "@/components/VisualAgentProvider";
 export function VisualDevConsole() {
   const { ask } = useVisualAgent();
   const [enabled, setEnabled] = useState(false);
-  const [value, setValue] = useState("Pull up last quarter's finances");
+  const [value, setValue] = useState(
+    "Diagram how Shukant connected CopilotKit and Recall",
+  );
 
   useEffect(() => {
     setEnabled(new URLSearchParams(window.location.search).get("dev") === "1");
