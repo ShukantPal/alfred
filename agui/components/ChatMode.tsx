@@ -23,7 +23,7 @@ type ChatEntry =
 export function ChatMode() {
   const { messages } = useMeetingChat();
   const { visuals } = useVisualAgent();
-  const endRef = useRef<HTMLLIElement | null>(null);
+  const listRef = useRef<HTMLOListElement | null>(null);
 
   const entries = useMemo<ChatEntry[]>(() => {
     const merged: ChatEntry[] = [
@@ -35,12 +35,51 @@ export function ChatMode() {
   }, [messages, visuals]);
 
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+    scrollChatToBottom(listRef.current, "smooth");
   }, [entries]);
+
+  useEffect(() => {
+    const list = listRef.current;
+    if (!list) return;
+
+    let frame: number | undefined;
+    const scrollToBottom = () => {
+      if (frame !== undefined) {
+        cancelAnimationFrame(frame);
+      }
+      frame = requestAnimationFrame(() => {
+        scrollChatToBottom(list, "smooth");
+      });
+    };
+
+    const observer = new ResizeObserver(() => {
+      scrollToBottom();
+    });
+    const observeRows = () => {
+      for (const child of list.children) {
+        observer.observe(child);
+      }
+    };
+
+    observeRows();
+    const mutationObserver = new MutationObserver(() => {
+      observeRows();
+      scrollToBottom();
+    });
+
+    mutationObserver.observe(list, { childList: true, subtree: true });
+    return () => {
+      if (frame !== undefined) {
+        cancelAnimationFrame(frame);
+      }
+      mutationObserver.disconnect();
+      observer.disconnect();
+    };
+  }, []);
 
   return (
     <div className="chat-mode">
-      <ol className="chat-mode__list">
+      <ol className="chat-mode__list" ref={listRef}>
         <li className="chat-mode__spacer" aria-hidden />
         {entries.map(entry =>
           entry.kind === "message" ? (
@@ -51,10 +90,15 @@ export function ChatMode() {
             </li>
           ),
         )}
-        <li ref={endRef} className="chat-mode__anchor" aria-hidden />
+        <li className="chat-mode__anchor" aria-hidden />
       </ol>
     </div>
   );
+}
+
+function scrollChatToBottom(list: HTMLOListElement | null, behavior: ScrollBehavior) {
+  if (!list) return;
+  list.scrollTo({ top: list.scrollHeight, behavior });
 }
 
 function ChatBubble({ message }: { message: ChatMessage }) {

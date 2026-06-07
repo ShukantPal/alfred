@@ -176,11 +176,13 @@ function TextVisual({ spec }: { spec: VisualTextSpec }) {
 
 function MermaidVisual({ spec }: { spec: VisualMermaidSpec }) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const renderId = useId().replace(/:/g, "");
+  const renderId = useId().replace(/[^a-zA-Z0-9_-]/g, "");
+  const renderCountRef = useRef(0);
+  const diagram = normalizeMermaidDiagram(spec.diagram);
 
   useEffect(() => {
     const container = containerRef.current;
-    if (!container || !spec.diagram.trim()) return;
+    if (!container || !diagram) return;
 
     let cancelled = false;
     container.replaceChildren();
@@ -195,8 +197,13 @@ function MermaidVisual({ spec }: { spec: VisualMermaidSpec }) {
           fontFamily: "inherit",
         });
         if (cancelled) return;
-        const diagram = normalizeMermaidDiagram(spec.diagram);
-        const { svg } = await renderMermaidSvg(mermaid, `alfred-mermaid-${renderId}`, diagram);
+        const attemptId = renderCountRef.current;
+        renderCountRef.current += 1;
+        const { svg } = await renderMermaidSvg(
+          mermaid,
+          `alfred-mermaid-${renderId}-${attemptId}`,
+          diagram,
+        );
         if (cancelled || !containerRef.current) return;
         containerRef.current.innerHTML = svg;
       } catch (error) {
@@ -207,9 +214,11 @@ function MermaidVisual({ spec }: { spec: VisualMermaidSpec }) {
         if (fallback) {
           try {
             const mermaid = (await import("mermaid")).default;
+            const attemptId = renderCountRef.current;
+            renderCountRef.current += 1;
             const { svg } = await renderMermaidSvg(
               mermaid,
-              `alfred-mermaid-fallback-${renderId}`,
+              `alfred-mermaid-fallback-${renderId}-${attemptId}`,
               fallback,
             );
             if (!cancelled && containerRef.current) {
@@ -227,8 +236,9 @@ function MermaidVisual({ spec }: { spec: VisualMermaidSpec }) {
 
     return () => {
       cancelled = true;
+      containerRef.current?.replaceChildren();
     };
-  }, [renderId, spec.diagram]);
+  }, [diagram, renderId]);
 
   return (
     <>
@@ -248,11 +258,24 @@ async function renderMermaidSvg(
 
 function normalizeMermaidDiagram(diagram: string): string {
   let normalized = diagram.trim();
-  normalized = normalized.replace(/^```(?:mermaid)?\s*/i, "").replace(/\s*```$/i, "").trim();
+  const fenced = normalized.match(/^```(?:mermaid)?\s*([\s\S]*?)\s*```$/i);
+  if (fenced?.[1]) {
+    normalized = fenced[1].trim();
+  } else {
+    normalized = normalized.replace(/^```(?:mermaid)?\s*/i, "").replace(/\s*```$/i, "").trim();
+  }
   if (!normalized.includes("\n") && normalized.includes("\\n")) {
     normalized = normalized.replace(/\\n/g, "\n");
   }
   normalized = normalized.replace(/^mermaid\s*\n/i, "").trim();
+
+  // Mermaid flowchart labels are fragile when an LLM emits raw parentheses.
+  // Quoted labels parse reliably and render the same text.
+  normalized = normalized.replace(/\[([^\]"`]*[()][^\]"`]*)\]/g, (_match, label: string) => {
+    const escaped = label.replace(/"/g, "#quot;");
+    return `["${escaped}"]`;
+  });
+
   return normalized;
 }
 

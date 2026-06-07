@@ -479,7 +479,7 @@ export class TalonCompanyDelegate implements CompanyDelegate {
         `[agent] Talon build-visual routed request=${requestId} channel=${channel} session=${routed.sessionId}`,
       );
 
-      answerPromise = collectTalonAnswer(
+      const visualPromise = collectTalonVisualSpec(
         runtime.client.streamSessionParts(
           new gateway.StreamSessionPartsRequest({
             ns: this.options.namespace,
@@ -490,13 +490,13 @@ export class TalonCompanyDelegate implements CompanyDelegate {
         ),
         this.toolUseCollector(request.meetingId),
       );
+      answerPromise = visualPromise.then(spec => JSON.stringify(spec));
 
-      const answer = await withTimeout(
-        answerPromise,
+      return await withTimeout(
+        visualPromise,
         this.options.timeoutMs,
         "Talon visual build timed out.",
       );
-      return parseVisualSpec(answer);
     } finally {
       streamController.abort();
       void answerPromise?.catch(() => undefined);
@@ -1035,6 +1035,44 @@ async function collectTalonAnswer(
   }
 
   return completedText || accumulated;
+}
+
+async function collectTalonVisualSpec(
+  stream: AsyncIterable<events.SessionMessagePartEvent>,
+  onTool?: (name: string) => void,
+): Promise<VisualSpec> {
+  let accumulated = "";
+
+  for await (const event of stream) {
+    const part = event.part;
+    const content = part?.content ?? "";
+    if (event.kind === events.SessionMessagePartEventKind.ERROR) {
+      throw new Error(content || "Talon visual build stream failed.");
+    }
+    logSessionPartEvent(event);
+    if (
+      onTool &&
+      event.kind === events.SessionMessagePartEventKind.DONE &&
+      part &&
+      part.partType !== models.SessionMessagePartType.TEXT
+    ) {
+      for (const toolName of toolNamesForPart(part)) {
+        onTool(toolName);
+      }
+    }
+    if (part?.partType !== models.SessionMessagePartType.TEXT) {
+      continue;
+    }
+    if (event.kind === events.SessionMessagePartEventKind.DELTA) {
+      accumulated += content;
+      continue;
+    }
+    if (event.kind === events.SessionMessagePartEventKind.DONE) {
+      return parseVisualSpec(content || accumulated);
+    }
+  }
+
+  return parseVisualSpec(accumulated);
 }
 
 async function nextWithQuietTimeout<T>(

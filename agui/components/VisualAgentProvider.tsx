@@ -1,6 +1,15 @@
 "use client";
 
-import { createContext, useCallback, useContext, useMemo, useRef, type ReactNode } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { useAgent, useCopilotKit, useRenderTool } from "@copilotkit/react-core/v2";
 import { VisualView } from "@/components/charts/VisualView";
 import { RENDER_CHART_TOOL } from "@/lib/talonVisualAgent";
@@ -36,6 +45,7 @@ const EMPTY_VALUE: VisualAgentValue = { visuals: [], ask: () => {} };
 export function VisualAgentProvider({ children }: { children: ReactNode }) {
   const { agent } = useAgent({ agentId: "alfred-visual" });
   const { copilotkit } = useCopilotKit();
+  const [mounted, setMounted] = useState(false);
 
   // Canonical generative-UI binding: any CopilotKit chat surface would render the
   // chart from this. The screenshare is headless, so we also read the agent's
@@ -51,7 +61,13 @@ export function VisualAgentProvider({ children }: { children: ReactNode }) {
   // record first-seen client time per visual id (stable across re-renders).
   const seenAtRef = useRef<Map<string, number>>(new Map());
   const minVisualTsRef = useRef<number | undefined>(undefined);
-  const visuals = extractVisuals(agent.messages, seenAtRef.current, minVisualTsRef.current);
+  const visuals = mounted
+    ? extractVisuals(agent.messages, seenAtRef.current, minVisualTsRef.current)
+    : [];
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   const ask = useCallback(
     (question: string, afterTs?: number) => {
