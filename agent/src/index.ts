@@ -15,11 +15,6 @@ export type {
   VisualTextSpec,
 } from "./types";
 export {
-  COMPANY_FINANCE,
-  getCompanyFinance,
-  type CompanyFinanceQuarter,
-} from "./company-memory";
-export {
   createTalonCompanyDelegateFromEnv,
   TalonCompanyDelegate,
   type TalonCompanyDelegateOptions,

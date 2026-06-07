@@ -7,6 +7,13 @@ export interface CompanyMemoryDoc {
   owner: string;
   url: string;
   text: string;
+  /**
+   * Optional machine-readable payload for this doc — exact numbers/tables the
+   * agent can turn into a chart or table. Intentionally untyped (any dataset
+   * shape) so memory scales to arbitrary datasets without per-dataset tools;
+   * general retrieval (search/get) surfaces it and the agent decides how to use it.
+   */
+  data?: Record<string, unknown>;
 }
 
 export interface CompanyMemoryResult extends CompanyMemoryDoc {
@@ -85,9 +92,49 @@ export const COMPANY_MEMORY_DOCS: CompanyMemoryDoc[] = [
     url: "https://docs.google.com/spreadsheets/d/quarterly-finances",
     text:
       "Company quarterly finances tracker (Q1-Q3 2025): total revenue, revenue by category " +
-      "(Subscriptions, Services, Marketplace, Other), total expenses, and net income. For the exact " +
-      "numbers needed to chart or summarize the quarterly finances, call the company_finance tool, " +
-      "which returns the structured per-quarter figures.",
+      "(Subscriptions, Services, Marketplace, Other), total expenses, and net income. The exact " +
+      "per-quarter figures are in this document's structured data.",
+    data: {
+      unit: "USD",
+      quarters: [
+        {
+          quarter: "Q1 2025",
+          totalRevenue: 1_925_000,
+          totalExpenses: 1_540_000,
+          netIncome: 385_000,
+          revenueByCategory: [
+            { label: "Subscriptions", value: 1_280_000 },
+            { label: "Services", value: 410_000 },
+            { label: "Marketplace", value: 175_000 },
+            { label: "Other", value: 60_000 },
+          ],
+        },
+        {
+          quarter: "Q2 2025",
+          totalRevenue: 2_160_000,
+          totalExpenses: 1_690_000,
+          netIncome: 470_000,
+          revenueByCategory: [
+            { label: "Subscriptions", value: 1_460_000 },
+            { label: "Services", value: 395_000 },
+            { label: "Marketplace", value: 230_000 },
+            { label: "Other", value: 75_000 },
+          ],
+        },
+        {
+          quarter: "Q3 2025",
+          totalRevenue: 2_500_000,
+          totalExpenses: 1_820_000,
+          netIncome: 680_000,
+          revenueByCategory: [
+            { label: "Subscriptions", value: 1_720_000 },
+            { label: "Services", value: 380_000 },
+            { label: "Marketplace", value: 305_000 },
+            { label: "Other", value: 95_000 },
+          ],
+        },
+      ],
+    },
   },
   {
     id: "gdoc-q3-roadmap",
@@ -101,80 +148,6 @@ export const COMPANY_MEMORY_DOCS: CompanyMemoryDoc[] = [
       "Marco (billing), Aisha (mobile).",
   },
 ];
-
-// --- Quarterly finances (seed) ----------------------------------------------
-// Structured finance data Alfred can turn into a chart/table. Kept separate from
-// the free-text docs above so retrieval can return exact numbers. `getCompanyFinance`
-// is the single swap point: replace its body with a Google Sheets / Redis read to
-// move off the seed without touching the delegate or MCP surface.
-
-export interface CompanyFinanceLine {
-  label: string;
-  value: number;
-}
-
-export interface CompanyFinanceQuarter {
-  quarter: string;
-  currency: string;
-  /** Revenue split by business line for the quarter. */
-  revenueByCategory: CompanyFinanceLine[];
-  totalRevenue: number;
-  totalExpenses: number;
-  netIncome: number;
-}
-
-const COMPANY_FINANCE_SEED: CompanyFinanceQuarter[] = [
-  {
-    quarter: "Q1 2025",
-    currency: "USD",
-    revenueByCategory: [
-      { label: "Subscriptions", value: 1_280_000 },
-      { label: "Services", value: 410_000 },
-      { label: "Marketplace", value: 175_000 },
-      { label: "Other", value: 60_000 },
-    ],
-    totalRevenue: 1_925_000,
-    totalExpenses: 1_540_000,
-    netIncome: 385_000,
-  },
-  {
-    quarter: "Q2 2025",
-    currency: "USD",
-    revenueByCategory: [
-      { label: "Subscriptions", value: 1_460_000 },
-      { label: "Services", value: 395_000 },
-      { label: "Marketplace", value: 230_000 },
-      { label: "Other", value: 75_000 },
-    ],
-    totalRevenue: 2_160_000,
-    totalExpenses: 1_690_000,
-    netIncome: 470_000,
-  },
-  {
-    quarter: "Q3 2025",
-    currency: "USD",
-    revenueByCategory: [
-      { label: "Subscriptions", value: 1_720_000 },
-      { label: "Services", value: 380_000 },
-      { label: "Marketplace", value: 305_000 },
-      { label: "Other", value: 95_000 },
-    ],
-    totalRevenue: 2_500_000,
-    totalExpenses: 1_820_000,
-    netIncome: 680_000,
-  },
-];
-
-export const COMPANY_FINANCE: CompanyFinanceQuarter[] = COMPANY_FINANCE_SEED;
-
-/**
- * The company's quarterly finances, most recent last. This is the single swap
- * point for the data source: replace the seed read with a Google Sheets / Redis
- * lookup later without changing the delegate or MCP tool surface.
- */
-export function getCompanyFinance(): CompanyFinanceQuarter[] {
-  return COMPANY_FINANCE;
-}
 
 export function getCompanyMemoryDoc(id: string): CompanyMemoryDoc | undefined {
   return COMPANY_MEMORY_DOCS.find(doc => doc.id === id);

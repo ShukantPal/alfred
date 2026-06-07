@@ -71,8 +71,9 @@ context. Redis remains the intended production memory layer via an external comp
  or null. ctl fetches the current items from agui, calls this from the `remove_action_item` tool
   path, then removes by id via `/api/meeting/tasks` (`{ op: "remove", id }`).
 - `CompanyDelegate.buildVisual({ meetingId, question })` runs a subagent (its own `weave.op` node,
-  `alfred.talon.buildVisual`) that retrieves the relevant company data (e.g. quarterly finances via
-  the `company_finance` MCP tool) and **chooses the representation**, returning a `VisualSpec`
+  `alfred.talon.buildVisual`) that retrieves the relevant company data via the general memory tools
+  (`company_memory_search` / `company_memory_get`, which surface any doc's structured `data` payload)
+  and **chooses the representation**, returning a `VisualSpec`
   (discriminated union: `pie | bar | line | table | text`). It is invoked from agui's CopilotKit
   Talon-bridge agent over ctl's `/api/visual` HTTP endpoint, not from a ctl voice tool directly (see
   "Voice-driven generative UI" below). `VisualSpec` is the ctl/agent contract type (mirrored in
@@ -132,8 +133,9 @@ ChatMode. Talon stays the only brain; CopilotKit is a pure render client. Flow:
   dev-only typed trigger (`VisualDevConsole`, shown with `?dev=1`) calls the same `ask` for testing.
 - Decision: this **augments** the existing voice/waveform chat (kept as-is); CopilotKit only adds the
   generative visual. Full migration of the whole transcript onto `useAgent` is a noted follow-on.
-- Seed finance data lives in `agent/src/company-memory.ts` behind `getCompanyFinance()` (the single
-  swap point for a real Sheets/Redis source) and is exposed via the `company_finance` MCP tool.
+- Seed data lives in `agent/src/company-memory.ts`: any memory doc may carry an optional structured
+  `data` payload (exact numbers for charts/tables), surfaced by the general `company_memory_*` tools.
+  No per-dataset tools — the whole memory corpus is the swap point for a real Sheets/Redis source.
 
 ## Voice tools: deterministic vs delegated (READ before adding a tool)
 There are two layers of model. (1) The OpenAI Realtime voice model in `ctl/src/realtime/openai.ts`
@@ -170,10 +172,10 @@ Steps to add a new voice tool:
 ## agent/ internals
 - `agent/src/types.ts`          — delegate interface used by ctl (incl. `VisualSpec`/`buildVisual`).
 - `agent/src/talon.ts`          — starts Talon, configures provider, namespace, MCPs, agent, sessions.
-- `agent/src/memory-mcp.ts`     — built-in stdio MCP server for seeded company memory (incl. the
-  `company_finance` tool).
-- `agent/src/company-memory.ts` — seeded holiday/onboarding context + quarterly finances
-  (`getCompanyFinance()`, the swap point for a real Sheets/Redis source) used by the MCP server.
+- `agent/src/memory-mcp.ts`     — built-in stdio MCP server for seeded company memory (general
+  `company_memory_search` / `get` / `list`; `get`/`search` surface a doc's structured `data`).
+- `agent/src/company-memory.ts` — seeded holiday/onboarding context + datasets (docs may carry an
+  optional structured `data` payload, e.g. quarterly finances) used by the MCP server.
 - `agent/src/observability.ts`  — Weave initialization.
 - `agent/src/server.ts`         — long-running Talon bootstrap process for debugging.
 - `agent/src/demo-client.ts`    — one-shot Talon delegation demo.
