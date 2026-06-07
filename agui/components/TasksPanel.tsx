@@ -1,6 +1,13 @@
 "use client";
 
-import { mockTasks, type MeetingTask } from "@/lib/mockTasks";
+import { useEffect, useState } from "react";
+import type { MeetingTask } from "@/lib/mockTasks";
+
+// The action items are generated once near the end of the meeting by the ctl-side
+// Talon subagent and stored in agui's tasks buffer. Poll it so the panel fills in
+// as soon as they are produced (same reliable request/response transport the live
+// notes poll uses).
+const POLL_MS = 2_000;
 
 function TaskItem({ task }: { task: MeetingTask }) {
   return (
@@ -19,7 +26,34 @@ function TaskItem({ task }: { task: MeetingTask }) {
 }
 
 export function TasksPanel() {
-  const tasks = mockTasks;
+  const [tasks, setTasks] = useState<MeetingTask[]>([]);
+
+  useEffect(() => {
+    let stopped = false;
+    let pollTimer: ReturnType<typeof setTimeout> | undefined;
+
+    const poll = async () => {
+      try {
+        const response = await fetch("/api/meeting/tasks", { cache: "no-store" });
+        if (response.ok) {
+          const data = (await response.json()) as { tasks: MeetingTask[] };
+          if (!stopped && Array.isArray(data.tasks)) setTasks(data.tasks);
+        }
+      } catch (error) {
+        console.error("[agui] tasks poll failed", error);
+      } finally {
+        if (!stopped) pollTimer = setTimeout(poll, POLL_MS);
+      }
+    };
+
+    void poll();
+
+    return () => {
+      stopped = true;
+      if (pollTimer) clearTimeout(pollTimer);
+    };
+  }, []);
+
   const openCount = tasks.filter((t) => t.status === "open").length;
 
   return (
@@ -28,11 +62,17 @@ export function TasksPanel() {
         <h2 className="alfred-card__title">Action Items</h2>
         <span className="alfred-badge">{openCount} open</span>
       </div>
-      <ul className="alfred-card__list">
-        {tasks.map((task) => (
-          <TaskItem key={task.id} task={task} />
-        ))}
-      </ul>
+      {tasks.length === 0 ? (
+        <p className="alfred-list-row__meta">
+          Ask Alfred to create action items to populate this list.
+        </p>
+      ) : (
+        <ul className="alfred-card__list">
+          {tasks.map((task) => (
+            <TaskItem key={task.id} task={task} />
+          ))}
+        </ul>
+      )}
     </section>
   );
 }

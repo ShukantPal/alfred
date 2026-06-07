@@ -59,12 +59,60 @@ context. Redis remains the intended production memory layer via an external comp
 - `createTalonCompanyDelegateFromEnv(process.env)` creates a `CompanyDelegate`.
 - `CompanyDelegate.ready()` starts Talon, configures the namespace/agent, and attaches MCPs.
 - `CompanyDelegate.ask({ meetingId, speaker, question })` sends one delegated question to a
-  meeting-scoped Talon session and returns the answer text.
+ meeting-scoped Talon session and returns the answer text.
+- `CompanyDelegate.extractActionItems({ meetingId, transcript })` runs an end-of-meeting subagent
+ (its own `weave.op` node, `alfred.talon.actionItems`) that transforms the full meeting transcript
+ into structured `ActionItem[]` (`{ title, assignee, status }`). ctl retains the transcript and
+ calls this from the voice model's `create_action_items` tool path, then POSTs the items to agui
+ (`/api/meeting/tasks`) for live display in the screenshare "Action Items" panel.
+- `CompanyDelegate.matchActionItemForRemoval({ meetingId, query, items })` runs a subagent
+ (its own `weave.op` node, `alfred.talon.matchActionItem`) that resolves which existing item a
+ spoken removal request refers to (handles paraphrase/synonyms) and returns the matching item id
+ or null. ctl fetches the current items from agui, calls this from the `remove_action_item` tool
+ path, then removes by id via `/api/meeting/tasks` (`{ op: "remove", id }`).
 - `CompanyDelegate.close()` stops the local Talon node.
 
 KEY RULE: ctl decides when the voice model may respond. ctl performs wake-word/address detection
 and the Realtime model only delegates after an addressed turn. agent/ is only called from the
-voice model's `delegate_to_company_agent` tool path.
+voice model's `delegate_to_company_agent` tool path (company-memory Q&A) or the
+`create_action_items` tool path (end-of-meeting action items).
+
+The voice model can also edit the action-items list via the `add_action_item` and
+`remove_action_item` tools. `add_action_item` is a deterministic ctl-side mutation (no Talon): ctl
+POSTs `{ op: "add", item }` to agui's `/api/meeting/tasks`. `remove_action_item` is delegated: ctl
+fetches the current items, asks the Talon `matchActionItemForRemoval` subagent which one the spoken
+phrase means, then removes by id (`{ op: "remove", id }`). agui retains a lenient lexical
+`{ op: "remove", title }` path as a fallback only.
+
+## Voice tools: deterministic vs delegated (READ before adding a tool)
+There are two layers of model. (1) The OpenAI Realtime voice model in `ctl/src/realtime/openai.ts`
+always reasons and *picks* which tool to call. (2) What the tool then *does* is either deterministic
+or delegated. Classify every new tool before building it:
+
+- **Deterministic tool** — given its arguments, the effect is a fixed operation with no further
+  reasoning (e.g. `add_action_item`, `start_screenshare`). Implement it as a plain ctl handler /
+  HTTP call. Do NOT route it through Talon and do NOT wrap it in `weave.op` — there is no reasoning
+  to observe.
+- **Delegated tool** — its work *is* open-ended reasoning over fuzzy input such as a free-form
+  question, a whole transcript, or mapping a paraphrased phrase to an existing item (e.g.
+  `delegate_to_company_agent`, `create_action_items`, `remove_action_item`). This needs a second
+  LLM, so it MUST go through a `CompanyDelegate` method in `agent/` (Talon), and that method MUST be
+  wrapped in a `weave.op` so it shows in the Weave delegation tree. Talon is also where MCP tools
+  (company-memory, Google Workspace, DuckDuckGo) are available.
+
+Rule of thumb: if you would need an LLM to decide the *result*, it is delegated (Talon + Weave).
+If the result is a mechanical mutation/side effect, it is deterministic (ctl only).
+
+Steps to add a new voice tool:
+1. Register it in `sendSessionUpdate()`'s `tools` array in `ctl/src/realtime/openai.ts` (name,
+   description, JSON-schema parameters) and add a `case` in `handleFunctionCall`.
+2. Add a matching `on<Tool>` callback to `OpenAIRealtimeVoiceOptions` (+ the private field and
+   constructor assignment) and wire it from `ctl/src/server.ts`, where the orchestrator lives
+   (it has `aguiBaseUrl`, `delegate`, the retained transcript, etc.).
+3. Add a one-line behavior note to `defaultInstructions()` so the model knows when to call it.
+4. Deterministic: implement the effect in ctl (often a POST to agui). Delegated: add the method to
+   the `CompanyDelegate` contract in `agent/src/types.ts`, implement it in `agent/src/talon.ts`
+   wrapped in a new `weave.op`, and update this file's contract section in the same commit.
 
 ## agent/ internals
 - `agent/src/types.ts`          — delegate interface used by ctl.

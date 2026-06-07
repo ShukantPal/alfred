@@ -201,11 +201,11 @@ body {
 
 .alfred-side-panel__title {
   margin: 0;
-  font-size: 18px;
-  font-weight: 600;
-  line-height: 1.2;
+  font-size: 32px;
+  font-weight: 800;
+  line-height: 1.1;
   letter-spacing: -0.02em;
-  color: var(--text);
+  color: #000;
 }
 
 .alfred-side-panel__cards {

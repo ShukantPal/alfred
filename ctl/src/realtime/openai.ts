@@ -29,6 +29,21 @@ export interface OpenAIRealtimeVoiceOptions {
   onAudioEnd(id: string): void;
   onAudioClear(): void;
   onStartScreenshare(): Promise<void> | void;
+  /**
+   * Generate end-of-meeting action items from the retained transcript and push
+   * them to the screenshare surface. Returns a short summary for the voice model.
+   */
+  onCreateActionItems(): Promise<{ count: number }>;
+  /** Add a single action item to the screenshare list (voice "add" command). */
+  onAddActionItem(input: { title: string; assignee?: string }): Promise<{
+    status: string;
+    title?: string;
+  }>;
+  /** Remove the action item matching the description (voice "remove" command). */
+  onRemoveActionItem(input: { title: string }): Promise<{
+    status: string;
+    title?: string;
+  }>;
 }
 
 type ConnectionState = "idle" | "connecting" | "open" | "ready" | "closed";
@@ -93,6 +108,9 @@ export class OpenAIRealtimeVoice {
   private readonly onAudioEnd: (id: string) => void;
   private readonly onAudioClear: () => void;
   private readonly onStartScreenshare: () => Promise<void> | void;
+  private readonly onCreateActionItems: () => Promise<{ count: number }>;
+  private readonly onAddActionItem: OpenAIRealtimeVoiceOptions["onAddActionItem"];
+  private readonly onRemoveActionItem: OpenAIRealtimeVoiceOptions["onRemoveActionItem"];
   private readonly queuedAudio: string[] = [];
   private socket?: WebSocket;
   private state: ConnectionState = "idle";
@@ -101,6 +119,12 @@ export class OpenAIRealtimeVoice {
   private lastAssistantItemId?: string;
   private lastAudioStartedAt?: number;
   private suppressResponseAudio = false;
+  // Mirror of the server's response lifecycle so we never start two responses at
+  // once (which fails with conversation_already_has_active_response). Flipped
+  // synchronously when we send response.create to close the send->created gap.
+  private responseInProgress = false;
+  // A response.create requested while one was active, deferred until it finishes.
+  private pendingResponseReason?: string;
   private readonly handledFunctionCallIds = new Set<string>();
   private readonly delegateAnswersByQuestion = new Map<string, TimedDelegateAnswer>();
   private readonly delegateInFlightByQuestion = new Map<string, Promise<string>>();
@@ -133,6 +157,9 @@ export class OpenAIRealtimeVoice {
     this.onAudioEnd = options.onAudioEnd;
     this.onAudioClear = options.onAudioClear;
     this.onStartScreenshare = options.onStartScreenshare;
+    this.onCreateActionItems = options.onCreateActionItems;
+    this.onAddActionItem = options.onAddActionItem;
+    this.onRemoveActionItem = options.onRemoveActionItem;
   }
 
   get enabled(): boolean {
@@ -161,6 +188,8 @@ export class OpenAIRealtimeVoice {
     this.socket?.close();
     this.socket = undefined;
     this.queuedAudio.length = 0;
+    this.responseInProgress = false;
+    this.pendingResponseReason = undefined;
   }
 
   private ensureConnected(): void {
@@ -207,6 +236,10 @@ export class OpenAIRealtimeVoice {
       this.state = "idle";
       this.socket = undefined;
       this.activeAudioId = undefined;
+      // The active/queued response died with the connection; reset so a reconnect
+      // can start a fresh response instead of deferring forever.
+      this.responseInProgress = false;
+      this.pendingResponseReason = undefined;
       this.onStatus("realtime voice disconnected");
       console.log(`[ctl] OpenAI Realtime disconnected code=${event.code}`);
     });
@@ -285,6 +318,56 @@ export class OpenAIRealtimeVoice {
               additionalProperties: false,
             },
           },
+          {
+            type: "function",
+            name: "create_action_items",
+            description:
+              "Generate end-of-meeting action items from the full meeting transcript and show them on the shared screen. Call when a participant asks Alfred to create, generate, or summarize action items, to-dos, follow-ups, or next steps.",
+            parameters: {
+              type: "object",
+              properties: {},
+              additionalProperties: false,
+            },
+          },
+          {
+            type: "function",
+            name: "add_action_item",
+            description:
+              "Add a single action item to the shared action-items list. Call when a participant asks Alfred to add, create, or note one specific to-do, task, or follow-up.",
+            parameters: {
+              type: "object",
+              properties: {
+                title: {
+                  type: "string",
+                  description: "A concise description of the action item.",
+                },
+                assignee: {
+                  type: "string",
+                  description: "Who owns the item, if stated; omit if unknown.",
+                },
+              },
+              required: ["title"],
+              additionalProperties: false,
+            },
+          },
+          {
+            type: "function",
+            name: "remove_action_item",
+            description:
+              "Remove a single action item from the shared action-items list. Call when a participant asks Alfred to remove, delete, or drop a specific to-do. Provide the title or a short description of the item to remove.",
+            parameters: {
+              type: "object",
+              properties: {
+                title: {
+                  type: "string",
+                  description:
+                    "The title or a short description identifying the action item to remove.",
+                },
+              },
+              required: ["title"],
+              additionalProperties: false,
+            },
+          },
         ],
         tool_choice: "auto",
       },
@@ -321,6 +404,7 @@ export class OpenAIRealtimeVoice {
         this.flushQueuedAudio();
         return;
       case "response.created":
+        this.responseInProgress = true;
         this.suppressResponseAudio = false;
         console.log("[ctl] realtime response created");
         return;
@@ -361,7 +445,9 @@ export class OpenAIRealtimeVoice {
           console.log("[ctl] realtime response status details", event.response.status_details);
         }
         this.endActiveAudio(event.response?.id);
+        this.responseInProgress = false;
         await this.handleFunctionCalls(event.response?.output ?? []);
+        this.flushPendingResponse();
         return;
       case "error":
         this.onStatus(`realtime error: ${event.error?.message ?? "unknown"}`);
@@ -518,6 +604,35 @@ export class OpenAIRealtimeVoice {
             error: error instanceof Error ? error.message : String(error),
           };
         }
+      case "create_action_items":
+        try {
+          const { count } = await this.onCreateActionItems();
+          console.log(`[ctl] realtime create_action_items produced ${count} items`);
+          return { status: "created", count };
+        } catch (error) {
+          return {
+            status: "failed",
+            error: error instanceof Error ? error.message : String(error),
+          };
+        }
+      case "add_action_item": {
+        const args = parseFunctionArgs(item.arguments);
+        const title = typeof args.title === "string" ? args.title.trim() : "";
+        if (!title) return { status: "failed", error: "An action item title is required." };
+        const assignee =
+          typeof args.assignee === "string" && args.assignee.trim()
+            ? args.assignee.trim()
+            : undefined;
+        return await this.onAddActionItem({ title, assignee });
+      }
+      case "remove_action_item": {
+        const args = parseFunctionArgs(item.arguments);
+        const title = typeof args.title === "string" ? args.title.trim() : "";
+        if (!title) {
+          return { status: "failed", error: "Specify which action item to remove." };
+        }
+        return await this.onRemoveActionItem({ title });
+      }
       default:
         return {
           status: "ignored",
@@ -582,6 +697,16 @@ export class OpenAIRealtimeVoice {
   }
 
   private createAudioResponse(reason: string): void {
+    // A response is already active; queue this one and let the active response
+    // finish. Single-slot queue: the latest requested turn wins.
+    if (this.responseInProgress) {
+      console.log(`[ctl] realtime response.create deferred (busy) reason=${reason}`);
+      this.pendingResponseReason = reason;
+      return;
+    }
+    // Mark in-progress synchronously so a concurrent turn defers rather than
+    // racing the response.created event.
+    this.responseInProgress = true;
     console.log(`[ctl] realtime response.create reason=${reason}`);
     this.send({
       type: "response.create",
@@ -590,6 +715,14 @@ export class OpenAIRealtimeVoice {
         instructions: responseInstructions(reason),
       },
     });
+  }
+
+  private flushPendingResponse(): void {
+    const reason = this.pendingResponseReason;
+    if (!reason) return;
+    this.pendingResponseReason = undefined;
+    console.log(`[ctl] realtime flushing deferred response reason=${reason}`);
+    this.createAudioResponse(reason);
   }
 
   private send(payload: unknown): void {
@@ -655,6 +788,9 @@ Call delegate_to_company_agent for factual questions that need internal company 
 
 # Screenshare
 When the user asks Alfred to share the screen, show the screen, present, or start screenshare, call start_screenshare. Confirm briefly after the tool returns.
+
+# Action items
+When the user asks Alfred to create, generate, or summarize action items, to-dos, follow-ups, or next steps, call create_action_items, then confirm briefly how many were captured. To add one specific item, call add_action_item with a concise title and an assignee if one was stated. To remove one, call remove_action_item with the title or a short description of the item. After an add or remove, confirm briefly; if a remove returns not_found, say you could not find a matching item.
 
 # Voice Style
 Be concise, natural, and direct. Speak at a brisk conversational pace, not slowly. Answer in one sentence by default, two only when necessary. Do not add filler, throat-clearing, long acknowledgements, or tool-use preambles.
