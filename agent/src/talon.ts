@@ -1357,6 +1357,9 @@ function visualBuildPrompt(question: string): string {
     'For Shukant / CopilotKit / Recall questions, use doc id "shukant-notes".',
     'Choose "mermaid" for diagram/flow/architecture asks; choose "quote" for verbatim words.',
     'For mermaid: "diagram" is valid Mermaid syntax (flowchart LR/TB or sequenceDiagram).',
+    'For mermaid node IDs, use simple ASCII identifiers only (recall, stt, ctl, agent, copilot).',
+    'Put display text in quoted labels, e.g. recall["Recall.ai bot"] --> stt["Streaming STT"].',
+    "Do not wrap Mermaid in markdown fences.",
     "Keep diagrams to 6-10 nodes max. Base labels on tool results — do not invent components.",
   ].join("\n");
 }

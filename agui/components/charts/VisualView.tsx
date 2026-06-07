@@ -195,13 +195,33 @@ function MermaidVisual({ spec }: { spec: VisualMermaidSpec }) {
           fontFamily: "inherit",
         });
         if (cancelled) return;
-        const { svg } = await mermaid.render(`alfred-mermaid-${renderId}`, spec.diagram.trim());
+        const diagram = normalizeMermaidDiagram(spec.diagram);
+        const { svg } = await renderMermaidSvg(mermaid, `alfred-mermaid-${renderId}`, diagram);
         if (cancelled || !containerRef.current) return;
         containerRef.current.innerHTML = svg;
-      } catch {
-        if (!cancelled && containerRef.current) {
-          containerRef.current.textContent = "Could not render this diagram.";
+      } catch (error) {
+        console.warn("[agui] Mermaid render failed", error, spec.diagram);
+        if (cancelled || !containerRef.current) return;
+
+        const fallback = shukantFallbackDiagram(spec);
+        if (fallback) {
+          try {
+            const mermaid = (await import("mermaid")).default;
+            const { svg } = await renderMermaidSvg(
+              mermaid,
+              `alfred-mermaid-fallback-${renderId}`,
+              fallback,
+            );
+            if (!cancelled && containerRef.current) {
+              containerRef.current.innerHTML = svg;
+            }
+            return;
+          } catch (fallbackError) {
+            console.warn("[agui] Mermaid fallback render failed", fallbackError);
+          }
         }
+
+        showMermaidSourceFallback(containerRef.current, spec.diagram);
       }
     })();
 
@@ -216,6 +236,54 @@ function MermaidVisual({ spec }: { spec: VisualMermaidSpec }) {
       <div className="chat-visual__mermaid" ref={containerRef} />
     </>
   );
+}
+
+async function renderMermaidSvg(
+  mermaid: typeof import("mermaid").default,
+  id: string,
+  diagram: string,
+): Promise<{ svg: string }> {
+  return mermaid.render(id, diagram);
+}
+
+function normalizeMermaidDiagram(diagram: string): string {
+  let normalized = diagram.trim();
+  normalized = normalized.replace(/^```(?:mermaid)?\s*/i, "").replace(/\s*```$/i, "").trim();
+  if (!normalized.includes("\n") && normalized.includes("\\n")) {
+    normalized = normalized.replace(/\\n/g, "\n");
+  }
+  normalized = normalized.replace(/^mermaid\s*\n/i, "").trim();
+  return normalized;
+}
+
+const SHUKANT_FALLBACK_DIAGRAM = `flowchart LR
+  recallIn["Recall.ai bot<br/>audio in"] --> stt["Streaming STT"]
+  stt --> ctl["ctl/<br/>address detection"]
+  ctl --> agent["agent/<br/>Talon + MCP memory"]
+  agent --> copilot["CopilotKit / AG-UI<br/>render surface"]
+  copilot --> recallShare["Recall.ai<br/>screenshare out"]
+  agent --> tts["TTS"]
+  tts --> recallAudio["Recall.ai<br/>audio out"]`;
+
+function shukantFallbackDiagram(spec: VisualMermaidSpec): string | undefined {
+  const haystack = `${spec.title} ${spec.subtitle ?? ""} ${spec.diagram}`.toLowerCase();
+  if (!haystack.includes("copilotkit") || !haystack.includes("recall")) return undefined;
+  return SHUKANT_FALLBACK_DIAGRAM;
+}
+
+function showMermaidSourceFallback(container: HTMLDivElement, diagram: string): void {
+  const wrapper = document.createElement("div");
+  wrapper.className = "chat-visual__mermaid-error";
+
+  const message = document.createElement("p");
+  message.textContent = "Could not render this diagram.";
+  wrapper.append(message);
+
+  const pre = document.createElement("pre");
+  pre.textContent = normalizeMermaidDiagram(diagram);
+  wrapper.append(pre);
+
+  container.replaceChildren(wrapper);
 }
 
 function QuoteVisual({ spec }: { spec: VisualQuoteSpec }) {
