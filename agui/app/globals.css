@@ -339,9 +339,8 @@ body {
   min-width: 0;
   min-height: 0;
   display: flex;
-  padding: 0 20px 20px;
+  padding: 20px;
   background: var(--surface);
-  border-top: none;
 }
 
 .screenshare-main .app-workspace {
@@ -355,8 +354,7 @@ body {
   min-height: 0;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-top: none;
-  border-radius: 0 0 12px 12px;
+  border-radius: 12px;
   overflow: hidden;
 }
 
@@ -451,27 +449,74 @@ body {
   color: var(--text-secondary);
 }
 
-.alfred-landing__tips {
-  margin: 0;
-  padding: 0;
-  list-style: none;
+.alfred-landing__suggestions {
   border-top: 1px solid var(--border-subtle);
   padding-top: 24px;
 }
 
-.alfred-landing__tips li {
-  padding: 10px 0;
-  font-size: 14px;
-  line-height: 1.5;
-  color: var(--text-secondary);
-  border-bottom: 1px solid var(--border-subtle);
-}
-
-.alfred-landing__tips li:last-child {
-  border-bottom: none;
-}
-
-.alfred-landing__tips strong {
-  color: var(--text);
+.alfred-landing__suggestions-label {
+  margin: 0 0 14px;
+  font-size: 13px;
   font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.suggestion-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.suggestion-chip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 12px 16px;
+  background: var(--panel-muted);
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  font-size: 15px;
+  line-height: 1.4;
+  color: var(--text-secondary);
+}
+
+.suggestion-chip__quote {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.suggestion-chip__text {
+  display: inline;
+}
+
+.suggestion-chip__product {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 2px;
+  padding: 2px 8px 2px 6px;
+  vertical-align: middle;
+  background: var(--surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.suggestion-chip__product .app-tab-icon {
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+}
+
+.suggestion-chip__product .app-tab-icon svg,
+.suggestion-chip__product .app-tab-icon--alfred img {
+  width: 16px;
+  height: 16px;
 }

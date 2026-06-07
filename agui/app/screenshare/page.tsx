@@ -1,21 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { AlfredSidePanel } from "@/components/AlfredSidePanel";
-import { AppTabBar } from "@/components/AppTabBar";
 import { AppWorkspace } from "@/components/AppWorkspace";
-import {
-  DEFAULT_APP_ID,
-  apps,
-  documentTitleForApp,
-  getAppTab,
-} from "@/lib/apps";
+import { DEFAULT_APP_ID, documentTitleForApp, getAppTab } from "@/lib/apps";
 
 // Full-frame layout for the surface Alfred screenshares into the meeting.
 // Recall renders this page in a cloud browser and streams it as video.
 export default function ScreensharePage() {
-  const [activeAppId, setActiveAppId] = useState(DEFAULT_APP_ID);
-  const activeApp = getAppTab(activeAppId);
+  const activeApp = getAppTab(DEFAULT_APP_ID);
 
   useEffect(() => {
     document.title = documentTitleForApp(activeApp);
@@ -26,7 +19,6 @@ export default function ScreensharePage() {
       <div className="screenshare-body">
         <AlfredSidePanel />
         <div className="screenshare-main">
-          <AppTabBar apps={apps} activeId={activeAppId} onSelect={setActiveAppId} />
           <AppWorkspace app={activeApp} />
         </div>
       </div>

@@ -1,6 +1,9 @@
 "use client";
 
 import Image from "next/image";
+import { Fragment } from "react";
+import { AppTabIcon } from "@/components/AppTabIcon";
+import { promptSuggestions } from "@/lib/apps";
 
 export function AlfredLanding() {
   return (
@@ -22,17 +25,28 @@ export function AlfredLanding() {
         </p>
       </div>
 
-      <ul className="alfred-landing__tips">
-        <li>
-          <strong>Hello Alfred</strong> — wake Alfred and ask a question
-        </li>
-        <li>
-          <strong>Start screenshare</strong> — show this workspace in the call
-        </li>
-        <li>
-          Switch tabs above to open Slack, Docs, Slides, or Sheets
-        </li>
-      </ul>
+      <div className="alfred-landing__suggestions">
+        <p className="alfred-landing__suggestions-label">Try saying</p>
+        <ul className="suggestion-list">
+          {promptSuggestions.map((suggestion) => {
+            const [before, after] = suggestion.prompt.split("{product}");
+            return (
+              <li key={suggestion.id} className="suggestion-chip">
+                <span className="suggestion-chip__quote">&ldquo;</span>
+                <span className="suggestion-chip__text">
+                  {before}
+                  <span className="suggestion-chip__product">
+                    <AppTabIcon icon={suggestion.icon} />
+                    <span>{suggestion.product}</span>
+                  </span>
+                  {after ? <Fragment>{after}</Fragment> : null}
+                </span>
+                <span className="suggestion-chip__quote">&rdquo;</span>
+              </li>
+            );
+          })}
+        </ul>
+      </div>
     </div>
   );
 }
