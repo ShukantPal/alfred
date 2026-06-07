@@ -78,7 +78,7 @@ context. Redis remains the intended production memory layer via an external comp
   `alfred.talon.buildVisual`) that retrieves the relevant company data via the general memory tools
   (`company_memory_search` / `company_memory_get`, which surface any doc's structured `data` payload)
   and **chooses the representation**, returning a `VisualSpec`
-  (discriminated union: `pie | bar | line | table | text`). It is invoked from agui's CopilotKit
+  (discriminated union: `pie | bar | line | table | text | quote`). It is invoked from agui's CopilotKit
   Talon-bridge agent over ctl's `/api/visual` HTTP endpoint, not from a ctl voice tool directly (see
   "Voice-driven generative UI" below). `VisualSpec` is the ctl/agent contract type (mirrored in
   `agui/lib/visual.ts`).
@@ -138,9 +138,8 @@ catch-up buffer because the highlight state is inherently live and reset every t
   `{op:"highlight", target}`) and is mirrored in `agui/lib/panel.ts`.
 - ctl broadcasts `{ type:"panel", event }` over `/ws/notes` via `broadcastPanelToNotes`
   (`ctl/src/server.ts`). Triggers: `onPanelSignal` on the Realtime client emits `clear` at the start
- of each addressed turn and `highlight target:"notes"` on `delegate_to_company_agent` and
- `show_meeting_notes`; the action-item handlers emit `highlight target:"tasks"`; and
- `delegate.onToolUse` maps each MCP tool
+ of each addressed turn and `highlight target:"notes"` on `show_meeting_notes`; the action-item
+ handlers emit `highlight target:"tasks"`; and `delegate.onToolUse` maps each MCP tool
   name to integration rows via `panelTargetsForTool` and emits `highlight` for each.
 - agui consumes the frames in `ChatWatcher` (`type:"panel"`) and stores the lit set in
   `PanelSignalProvider` (`usePanelSignals`), which `AlfredSidePanel` reads. `clear` empties the set.

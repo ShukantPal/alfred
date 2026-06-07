@@ -925,15 +925,17 @@ async function collectTalonAnswer(
       throw new Error(content || "Talon company agent stream failed.");
     }
     logSessionPartEvent(event);
-    // Surface each resolved tool call so the caller can map it to a live UI
-    // integration highlight. DONE keeps it to one signal per call (not per delta).
+    // Surface each resolved tool-related part so the caller can map it to a live
+    // UI integration highlight. DONE keeps it to one signal per call (not per delta).
     if (
       onTool &&
       event.kind === events.SessionMessagePartEventKind.DONE &&
-      part?.partType === models.SessionMessagePartType.TOOL_CALL &&
-      part.name
+      part &&
+      part.partType !== models.SessionMessagePartType.TEXT
     ) {
-      onTool(part.name);
+      for (const toolName of toolNamesForPart(part)) {
+        onTool(toolName);
+      }
     }
     if (part?.partType !== models.SessionMessagePartType.TEXT) {
       continue;
@@ -988,6 +990,70 @@ function logSessionPartEvent(event: events.SessionMessagePartEvent): void {
   console.log(
     `[agent] Talon routed session ${typeName} done session=${event.sessionId} name=${part.name || "<none>"} payload=${truncateLog(payload, 220)}`,
   );
+}
+
+function toolNamesForPart(part: models.SessionMessagePart): string[] {
+  const names = new Set<string>();
+  addToolName(names, part.name);
+
+  // Some Talon/MCP tool-call parts put the function name in the serialized
+  // payload rather than `part.name`; include those strings so ctl can map
+  // integration highlights like DuckDuckGo reliably.
+  for (const value of [part.payloadJson, part.content]) {
+    addToolName(names, value);
+    collectToolNamesFromJson(names, value);
+  }
+
+  return [...names];
+}
+
+function addToolName(names: Set<string>, value: unknown): void {
+  if (typeof value !== "string") return;
+  const trimmed = value.trim();
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) return;
+  if (trimmed.length > 120 || trimmed.includes("\n")) return;
+  if (trimmed) names.add(trimmed);
+}
+
+function collectToolNamesFromJson(names: Set<string>, value: string): void {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return;
+  }
+  collectToolNamesFromValue(names, parsed);
+}
+
+function collectToolNamesFromValue(names: Set<string>, value: unknown): void {
+  if (!value || typeof value !== "object") return;
+  if (Array.isArray(value)) {
+    for (const item of value) collectToolNamesFromValue(names, item);
+    return;
+  }
+
+  const record = value as Record<string, unknown>;
+  for (const key of [
+    "name",
+    "tool",
+    "toolName",
+    "function",
+    "functionName",
+    "server",
+    "serverName",
+    "server_name",
+    "mcpServer",
+    "mcp_server",
+  ]) {
+    addToolName(names, record[key]);
+  }
+  const fn = record.function;
+  if (fn && typeof fn === "object") {
+    addToolName(names, (fn as Record<string, unknown>).name);
+  }
+  for (const nested of Object.values(record)) {
+    collectToolNamesFromValue(names, nested);
+  }
 }
 
 function sessionPartTypeName(value: models.SessionMessagePartType): string {
@@ -1184,14 +1250,20 @@ function visualBuildPrompt(question: string): string {
     '- "line": a trend over an ordered sequence (e.g. net income over quarters).',
     '- "table": multiple columns of values that do not chart cleanly.',
     '- "text": a short factual answer with no useful chart.',
+    '- "quote": a key passage from company memory (Slack, docs, notes) — how someone ' +
+      'implemented something, an explanation worth showing verbatim. Use when the request asks ' +
+      'how a colleague did something or to show/pull up their words.',
     "",
     "Respond with ONLY a JSON object (no prose, no markdown fences) matching exactly one of:",
     '{"kind":"pie"|"bar"|"line","title":string,"subtitle"?:string,"unit"?:string,"series":[{"label":string,"value":number}]}',
     '{"kind":"table","title":string,"subtitle"?:string,"columns":string[],"rows":(string|number)[][]}',
     '{"kind":"text","title"?:string,"text":string}',
+    '{"kind":"quote","title"?:string,"text":string,"attribution":string,"source"?:string}',
     "",
     "Rules: numeric values must be plain numbers (no commas, currency symbols, or units in the number).",
     'Put any currency/unit hint in "unit" (e.g. "$"). Keep the title short. Prefer 2-8 data points.',
+    'For quote: "text" is the verbatim passage (1-4 sentences from tool results, not invented).',
+    '"attribution" is the colleague name; "source" is the doc/Slack title when available.',
   ].join("\n");
 }
 
@@ -1270,6 +1342,19 @@ function parseVisualSpec(answer: string): VisualSpec {
     const text = readSpecString(record.text);
     if (!text) return fallback;
     return { kind: "text", title: optionalSpecString(record.title), text };
+  }
+
+  if (kind === "quote") {
+    const text = readSpecString(record.text);
+    const attribution = readSpecString(record.attribution);
+    if (!text || !attribution) return fallback;
+    return {
+      kind: "quote",
+      title: optionalSpecString(record.title),
+      text,
+      attribution,
+      source: optionalSpecString(record.source),
+    };
   }
 
   return fallback;

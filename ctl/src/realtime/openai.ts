@@ -366,11 +366,13 @@ export class OpenAIRealtimeVoice {
             type: "function",
             name: "render_visual",
             description:
-              "Show Alfred-decided generative UI (chart, graph, or table) on the shared screen. " +
+              "Show Alfred-decided generative UI on the shared screen: chart, graph, table, or stylized quote. " +
               "PREFERRED for quantitative company data: finances, revenue, expenses, metrics, trends, " +
               "comparisons, breakdowns, quarterly/annual reports, and any question whose best answer is " +
               "numbers in a chart or table — even if the user does not say \"chart\" or \"graph\". " +
               "Also use when they ask to show, pull up, display, visualize, or report data. " +
+              "Use for colleague explanations too — e.g. how someone implemented something, or to pull up " +
+              "their words from Slack/docs as a quote bubble on screen. " +
               "Alfred picks the representation; you only provide what to visualize.",
             parameters: {
               type: "object",
@@ -390,7 +392,8 @@ export class OpenAIRealtimeVoice {
             name: "delegate_to_company_agent",
             description:
               "Ask Alfred's Talon-backed delegate for internal company facts from company docs, Slack/project/meeting context, colleague notes, ship-readiness blockers, or current public web lookup. " +
-              "Do NOT use for quantitative data (finances, metrics, trends, breakdowns) — use render_visual instead so the answer appears as a chart or table on screen.",
+              "Do NOT use for quantitative data (finances, metrics, trends, breakdowns) — use render_visual instead. " +
+              "Do NOT use when the user asks how a colleague implemented something or to show their words on screen — use render_visual for a quote bubble.",
             parameters: {
               type: "object",
               properties: {
@@ -785,6 +788,7 @@ export class OpenAIRealtimeVoice {
         const args = parseFunctionArgs(item.arguments);
         const question = typeof args.question === "string" ? args.question.trim() : "";
         if (question) {
+          const turnTs = Date.now();
           console.log(`[ctl] realtime delegate question: ${truncateForLog(question, 240)}`);
           // Surface the Q&A on the screenshare chat view immediately, before the
           // (slower) delegate call resolves. Show the user's own words (STT), not the
@@ -796,6 +800,7 @@ export class OpenAIRealtimeVoice {
             role: "user",
             kind: "text",
             text: this.lastUserTranscript || question,
+            ts: turnTs,
           });
           const alfredId = crypto.randomUUID();
           this.pendingChatAnswerId = alfredId;
@@ -807,12 +812,9 @@ export class OpenAIRealtimeVoice {
             role: "alfred",
             kind: "voice",
             status: "thinking",
+            ts: turnTs + 1,
           });
         }
-        // Alfred is drawing on meeting/company context and surfacing it in the
-        // chat (meeting-notes) window — light up the Meeting Notes row. Integration
-        // rows light up separately from the delegate's own tool usage.
-        if (question) this.onPanelSignal?.({ op: "highlight", target: "notes" });
         const answer = question ? await this.askDelegateOnce(question) : "No question was provided for delegation.";
         console.log(
           `[ctl] realtime delegate answer ${answer.length} chars: ${truncateForLog(answer, 320)}`,
@@ -1162,8 +1164,9 @@ Only speak when someone directly addresses Alfred or clearly asks the meeting bo
 # Answering
 Answer normal addressed questions directly when you can do so without private company context or current external lookup.
 
-# Visuals (prefer for numbers)
+# Visuals (prefer for numbers and on-screen quotes)
 When a question involves company metrics, finances, revenue, expenses, trends, comparisons, breakdowns, quarterly/annual figures, or any data best shown as a chart or table, call render_visual — even if the user only asks "what were…", "how did we do…", or "pull up the report" without saying "chart". Examples: quarterly finances, revenue by category, net income over time. Call ONLY render_visual for that request (not delegate_to_company_agent). Alfred picks the chart/table and it renders on the shared screen. After the tool returns you may give a brief spoken intro (one sentence); the chart carries the detail — do not read out every number.
+When the user asks how a colleague implemented something, or to show/pull up someone's explanation from Slack or docs (e.g. "how did Shukant wire CopilotKit and Recall?"), call render_visual so Alfred can render their words as a quote bubble on screen — not delegate_to_company_agent.
 
 # Delegation
 Call delegate_to_company_agent for non-quantitative factual questions: colleague notes, ship readiness, blockers, project status, Slack context, policy/docs prose, or current public web lookup. Do not use delegate for finances, metrics, or other numeric data — use render_visual instead. For delegated questions, do not speak before the tool result is available. Call the tool at most once for a user question, then answer using that result. The delegation result is authoritative. If it says context is missing, say that plainly.
@@ -1191,6 +1194,7 @@ function responseInstructions(reason: string, addressedText?: string): string {
 
   const base =
     "If the request is about company metrics, finances, trends, or numeric breakdowns, call render_visual (not delegate_to_company_agent). " +
+    "If it asks how a colleague implemented something or to show their words on screen, call render_visual for a quote (not delegate_to_company_agent). " +
     "If the request asks for meeting notes or a meeting recap, call show_meeting_notes. " +
     "If it needs other internal company context or current public information, call delegate_to_company_agent. " +
     "Call the chosen tool silently and do not produce spoken content before the tool result. Otherwise answer concisely by voice.";

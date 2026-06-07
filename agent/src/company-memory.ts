@@ -147,6 +147,20 @@ export const COMPANY_MEMORY_DOCS: CompanyMemoryDoc[] = [
       "Onboarding and billing are must-ship; mobile beta is best-effort. Owners: Priya (onboarding), " +
       "Marco (billing), Aisha (mobile).",
   },
+  {
+    id: "slack-copilotkit-recall-bridge",
+    source: "slack",
+    title: "#eng-platform - CopilotKit ↔ Recall bridge",
+    owner: "Shukant",
+    url: "https://acme.slack.com/archives/C-eng-platform/p1718200000",
+    text:
+      "Shukant wired the screenshare visual path between CopilotKit and Recall. Recall owns the " +
+      "meeting pipe — audio in/out and the shared browser tab the bot presents. CopilotKit stays " +
+      "headless on that surface: when the voice model calls render_visual, ctl broadcasts agui_run " +
+      "over the /ws/notes WebSocket; agui's ChatWatcher triggers the alfred-visual agent, which " +
+      "POSTs back to ctl /api/visual for Talon buildVisual. The chart or quote lands in ChatMode " +
+      "alongside the waveform. Recall never runs Talon — it only pipes the screenshare surface.",
+  },
 ];
 
 export function getCompanyMemoryDoc(id: string): CompanyMemoryDoc | undefined {

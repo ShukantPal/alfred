@@ -2,7 +2,7 @@ import { addTask, getTasks, removeTask, removeTaskById, setTasks } from "@/lib/t
 
 export const dynamic = "force-dynamic";
 
-// ctl POSTs action-item updates here; the screenshare TasksPanel polls GET.
+// ctl POSTs action-item updates here; ctl also renders the list in the chat pane.
 //   { items: [...] }            -> replace the whole list (end-of-meeting generation)
 //   { op: "add", item: {...} }  -> append one item (voice "add" command)
 //   { op: "remove", id }        -> remove by exact id (after the delegate resolves a match)

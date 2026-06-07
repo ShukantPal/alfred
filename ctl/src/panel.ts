@@ -38,7 +38,18 @@ export function panelTargetsForTool(toolName: string): PanelTarget[] {
   if (name.includes("company_memory") || name.includes("memory")) {
     targets.add("redis");
   }
-  if (name.includes("duckduckgo") || name.includes("ddg")) {
+  if (
+    name.includes("duckduckgo") ||
+    name.includes("ddg") ||
+    name.includes("duck-duck-go") ||
+    name.includes("duck duck go") ||
+    name === "search" ||
+    name === "functions.search" ||
+    name === "web_search" ||
+    name === "web.search" ||
+    name === "search_search" ||
+    name === "mcp_search_search"
+  ) {
     targets.add("duckduckgo");
   }
 

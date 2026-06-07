@@ -15,7 +15,13 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import type { VisualChartSpec, VisualSpec, VisualTableSpec, VisualTextSpec } from "@/lib/visual";
+import type {
+  VisualChartSpec,
+  VisualQuoteSpec,
+  VisualSpec,
+  VisualTableSpec,
+  VisualTextSpec,
+} from "@/lib/visual";
 
 // Alfred-chosen generative UI. Rendered inside the screenshare chat view from a
 // VisualSpec the Talon delegate produced. Recharts handles the chart kinds; tables
@@ -45,6 +51,8 @@ function renderSpec(spec: VisualSpec) {
       return <ChartVisual spec={spec} />;
     case "table":
       return <TableVisual spec={spec} />;
+    case "quote":
+      return <QuoteVisual spec={spec} />;
     case "text":
     default:
       return <TextVisual spec={spec} />;
@@ -158,6 +166,24 @@ function TextVisual({ spec }: { spec: VisualTextSpec }) {
     <>
       <VisualHeader title={spec.title} />
       <p className="chat-visual__text">{spec.text}</p>
+    </>
+  );
+}
+
+function QuoteVisual({ spec }: { spec: VisualQuoteSpec }) {
+  return (
+    <>
+      <VisualHeader title={spec.title} />
+      <blockquote className="chat-visual__quote">
+        <span className="chat-visual__quote-mark" aria-hidden>
+          “
+        </span>
+        <p className="chat-visual__quote-text">{spec.text}</p>
+        <footer className="chat-visual__quote-footer">
+          <cite className="chat-visual__quote-attribution">{spec.attribution}</cite>
+          {spec.source ? <span className="chat-visual__quote-source">{spec.source}</span> : null}
+        </footer>
+      </blockquote>
     </>
   );
 }

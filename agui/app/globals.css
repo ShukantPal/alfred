@@ -452,6 +452,16 @@ body {
   background: var(--surface);
 }
 
+/* Alfred screenshare main pane — full bleed, no card chrome */
+.app-workspace[data-app="alfred"] {
+  padding: 0;
+}
+
+.app-workspace[data-app="alfred"] .app-workspace-card {
+  border: none;
+  border-radius: 0;
+}
+
 .app-workspace-card {
   display: flex;
   flex-direction: column;
@@ -812,6 +822,66 @@ body {
   color: var(--text);
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* Stylized quote bubble — colleague's words from docs/Slack. */
+.chat-visual__quote {
+  position: relative;
+  margin: 0;
+  padding: 14px 16px 12px 20px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.06) 0%, rgba(13, 148, 136, 0.05) 100%);
+  border-left: 3px solid var(--accent);
+}
+
+.chat-visual__quote-mark {
+  position: absolute;
+  top: -4px;
+  left: 10px;
+  font-size: 42px;
+  line-height: 1;
+  font-family: Georgia, "Times New Roman", serif;
+  color: var(--accent);
+  opacity: 0.35;
+  pointer-events: none;
+  user-select: none;
+}
+
+.chat-visual__quote-text {
+  position: relative;
+  margin: 0 0 10px;
+  padding-top: 6px;
+  font-size: 15px;
+  line-height: 1.55;
+  font-style: italic;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.chat-visual__quote-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 10px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.chat-visual__quote-attribution {
+  font-style: normal;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.chat-visual__quote-source {
+  color: var(--muted);
+}
+
+.chat-visual__quote-source::before {
+  content: "·";
+  margin-right: 6px;
+  color: var(--border);
 }
 
 /* Dev-only generative-UI trigger (?dev=1). Not shown in the meeting video. */

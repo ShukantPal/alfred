@@ -42,7 +42,7 @@ export interface ActionItemMatchRequest {
 }
 
 /** The visual representations Alfred can choose from when answering with UI. */
-export type VisualKind = "pie" | "bar" | "line" | "table" | "text";
+export type VisualKind = "pie" | "bar" | "line" | "table" | "text" | "quote";
 
 /** A single labelled datapoint shared by pie/bar/line charts. */
 export interface VisualPoint {
@@ -75,12 +75,25 @@ export interface VisualTextSpec {
   text: string;
 }
 
+/** A stylized quote bubble for a colleague's words from docs, Slack, or notes. */
+export interface VisualQuoteSpec {
+  kind: "quote";
+  /** The quoted passage (may include line breaks). */
+  text: string;
+  /** Who said or wrote it (e.g. a colleague's name). */
+  attribution: string;
+  /** Optional source label (e.g. "Slack #eng-platform"). */
+  source?: string;
+  /** Optional heading above the bubble. */
+  title?: string;
+}
+
 /**
  * A self-describing UI spec produced by Alfred. The `kind` field is the
  * discriminant CopilotKit's renderer switches on; Alfred decides which kind
  * best represents the answer.
  */
-export type VisualSpec = VisualChartSpec | VisualTableSpec | VisualTextSpec;
+export type VisualSpec = VisualChartSpec | VisualTableSpec | VisualTextSpec | VisualQuoteSpec;
 
 export interface VisualRequest {
   meetingId: string;
