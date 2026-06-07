@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { logPollFailure, pollDelayMs } from "@/lib/meetingPoll";
 import type { MeetingTask } from "@/lib/mockTasks";
 
 // The action items are generated once near the end of the meeting by the ctl-side
@@ -30,19 +31,30 @@ export function TasksPanel() {
 
   useEffect(() => {
     let stopped = false;
+    let pollFailures = 0;
     let pollTimer: ReturnType<typeof setTimeout> | undefined;
+    const pollAbort = new AbortController();
 
     const poll = async () => {
       try {
-        const response = await fetch("/api/meeting/tasks", { cache: "no-store" });
+        const response = await fetch("/api/meeting/tasks", {
+          cache: "no-store",
+          signal: pollAbort.signal,
+        });
         if (response.ok) {
           const data = (await response.json()) as { tasks: MeetingTask[] };
           if (!stopped && Array.isArray(data.tasks)) setTasks(data.tasks);
+          pollFailures = 0;
+        } else {
+          pollFailures += 1;
         }
       } catch (error) {
-        console.error("[agui] tasks poll failed", error);
+        pollFailures += 1;
+        logPollFailure("tasks", error, pollFailures);
       } finally {
-        if (!stopped) pollTimer = setTimeout(poll, POLL_MS);
+        if (!stopped) {
+          pollTimer = setTimeout(poll, pollDelayMs(POLL_MS, pollFailures));
+        }
       }
     };
 
@@ -50,6 +62,7 @@ export function TasksPanel() {
 
     return () => {
       stopped = true;
+      pollAbort.abort();
       if (pollTimer) clearTimeout(pollTimer);
     };
   }, []);

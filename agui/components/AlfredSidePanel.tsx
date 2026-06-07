@@ -76,7 +76,6 @@ export function AlfredSidePanel() {
                 <li
                   key={row.target}
                   className={`panel-row panel-row--artifact${active ? " panel-row--active" : ""}`}
-                  data-active={active}
                 >
                   <ArtifactGlyph glyph={row.glyph} />
                   <span className="panel-row__label">{row.label}</span>
@@ -95,7 +94,6 @@ export function AlfredSidePanel() {
                 <li
                   key={row.id}
                   className={`panel-row panel-row--integration${active ? " panel-row--active" : ""}`}
-                  data-active={active}
                 >
                   <span className="panel-row__icon">
                     <IntegrationIcon integration={row.id} />

@@ -171,7 +171,7 @@ function createBaseStyle(): HTMLStyleElement {
   const style = document.createElement("style");
   style.textContent = `
     :root {
-      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
       background: #101418;
       color: #f6f1e8;
     }

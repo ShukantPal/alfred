@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import type { ChatEvent, ChatMessage } from "@/lib/chat";
+import { logPollFailure, pollDelayMs } from "@/lib/meetingPoll";
 import type { PanelSignalEvent } from "@/lib/panel";
 import { useMeetingChat } from "@/components/ChatProvider";
 import { usePanelSignals } from "@/components/PanelSignalProvider";
@@ -17,18 +18,27 @@ export function ChatWatcher() {
   const { applyEvent } = useMeetingChat();
   const { ask } = useVisualAgent();
   const { applySignal } = usePanelSignals();
+  const applyEventRef = useRef(applyEvent);
+  const askRef = useRef(ask);
+  const applySignalRef = useRef(applySignal);
+  applyEventRef.current = applyEvent;
+  askRef.current = ask;
+  applySignalRef.current = applySignal;
 
   useEffect(() => {
     let stopped = false;
     let cursor = 0;
+    let pollFailures = 0;
     let pollTimer: ReturnType<typeof setTimeout> | undefined;
     let wsRetryTimer: ReturnType<typeof setTimeout> | undefined;
     let ws: WebSocket | undefined;
+    const pollAbort = new AbortController();
 
     const poll = async () => {
       try {
         const response = await fetch(`/api/meeting/chat?after=${cursor}`, {
           cache: "no-store",
+          signal: pollAbort.signal,
         });
         if (response.ok) {
           const data = (await response.json()) as {
@@ -36,14 +46,20 @@ export function ChatWatcher() {
             messages: ChatMessage[];
           };
           for (const message of data.messages) {
-            applyEvent({ op: "add", ...message });
+            applyEventRef.current({ op: "add", ...message });
           }
           if (typeof data.seq === "number") cursor = data.seq;
+          pollFailures = 0;
+        } else {
+          pollFailures += 1;
         }
       } catch (error) {
-        console.error("[agui] chat poll failed", error);
+        pollFailures += 1;
+        logPollFailure("chat", error, pollFailures);
       } finally {
-        if (!stopped) pollTimer = setTimeout(poll, POLL_MS);
+        if (!stopped) {
+          pollTimer = setTimeout(poll, pollDelayMs(POLL_MS, pollFailures));
+        }
       }
     };
 
@@ -83,10 +99,10 @@ export function ChatWatcher() {
             afterTs?: number;
           };
           if (message.type === "chat" && message.event) {
-            applyEvent(message.event as ChatEvent);
+            applyEventRef.current(message.event as ChatEvent);
           } else if (message.type === "panel" && message.event) {
             // Live left-panel highlight: clear (new prompt) or light up a row.
-            applySignal(message.event as PanelSignalEvent);
+            applySignalRef.current(message.event as PanelSignalEvent);
           } else if (message.type === "agui_run" && typeof message.question === "string") {
             // Voice asked Alfred to visualize something: run the headless CopilotKit
             // agent programmatically (the participant never types). `afterTs` keeps
@@ -95,7 +111,7 @@ export function ChatWatcher() {
               typeof message.afterTs === "number" && Number.isFinite(message.afterTs)
                 ? message.afterTs
                 : undefined;
-            ask(message.question, afterTs);
+            askRef.current(message.question, afterTs);
           }
         } catch {
           // Ignore non-JSON / non-chat frames.
@@ -114,6 +130,7 @@ export function ChatWatcher() {
 
     return () => {
       stopped = true;
+      pollAbort.abort();
       if (pollTimer) clearTimeout(pollTimer);
       if (wsRetryTimer) clearTimeout(wsRetryTimer);
       if (ws) {
@@ -121,7 +138,7 @@ export function ChatWatcher() {
         ws.close();
       }
     };
-  }, [applyEvent, ask, applySignal]);
+  }, []);
 
   return null;
 }
