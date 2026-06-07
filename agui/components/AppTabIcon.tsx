@@ -63,6 +63,16 @@ const icons: Record<Exclude<AppIcon, "alfred">, ReactNode> = {
       />
     </svg>
   ),
+  drive: (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path fill="#0066DA" d="M4.5 19.5 1.5 14l5.25-9 3 5.25-5.25 9z" />
+      <path fill="#00AC47" d="M4.5 19.5 7.5 14h9l-3 5.5h-9z" />
+      <path fill="#EA4335" d="M22.5 14h-6L11.25 5h6L22.5 14z" />
+      <path fill="#00832D" d="m6.75 5 3 5.25L7.5 14 4.5 8.75 6.75 5z" />
+      <path fill="#2684FC" d="M16.5 14h6l-3 5.5h-6l3-5.5z" />
+      <path fill="#FFBA00" d="m11.25 5 5.25 9-2.25 4.25L9 9.5 11.25 5z" />
+    </svg>
+  ),
 };
 
 interface AppTabIconProps {
