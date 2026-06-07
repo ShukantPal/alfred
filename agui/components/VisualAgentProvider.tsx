@@ -20,7 +20,8 @@ export interface VisualItem {
 
 interface VisualAgentValue {
   visuals: VisualItem[];
-  ask(question: string): void;
+  /** `afterTs` slots the chart after the user prompt + waveform in the chat timeline. */
+  ask(question: string, afterTs?: number): void;
 }
 
 const VisualAgentContext = createContext<VisualAgentValue | null>(null);
@@ -49,12 +50,16 @@ export function VisualAgentProvider({ children }: { children: ReactNode }) {
   // against chat bubbles. The agent's tool-call messages carry no timestamp, so we
   // record first-seen client time per visual id (stable across re-renders).
   const seenAtRef = useRef<Map<string, number>>(new Map());
-  const visuals = extractVisuals(agent.messages, seenAtRef.current);
+  const minVisualTsRef = useRef<number | undefined>(undefined);
+  const visuals = extractVisuals(agent.messages, seenAtRef.current, minVisualTsRef.current);
 
   const ask = useCallback(
-    (question: string) => {
+    (question: string, afterTs?: number) => {
       const trimmed = question.trim();
       if (!trimmed) return;
+      if (typeof afterTs === "number" && Number.isFinite(afterTs)) {
+        minVisualTsRef.current = afterTs;
+      }
       agent.addMessage({ id: crypto.randomUUID(), role: "user", content: trimmed });
       void copilotkit.runAgent({ agent });
     },
@@ -84,7 +89,11 @@ interface ToolCallMessage {
   }>;
 }
 
-function extractVisuals(messages: readonly unknown[], seenAt: Map<string, number>): VisualItem[] {
+function extractVisuals(
+  messages: readonly unknown[],
+  seenAt: Map<string, number>,
+  minTs?: number,
+): VisualItem[] {
   const items: VisualItem[] = [];
   for (const raw of messages) {
     const message = raw as ToolCallMessage;
@@ -96,7 +105,7 @@ function extractVisuals(messages: readonly unknown[], seenAt: Map<string, number
       if (!id || !spec) continue;
       let ts = seenAt.get(id);
       if (ts === undefined) {
-        ts = Date.now();
+        ts = Math.max(Date.now(), minTs ?? 0);
         seenAt.set(id, ts);
       }
       items.push({ id, spec, ts });

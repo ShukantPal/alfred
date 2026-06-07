@@ -83,13 +83,13 @@ export function startCtlServer(
   // Tell the screenshare's headless CopilotKit client to run the alfred-visual agent
   // for a free-form request. Transient trigger (ws-only); the agent then calls back
   // into ctl's /api/visual -> Talon buildVisual to produce the chart.
-  const broadcastAguiRun = (question: string) => {
+  const broadcastAguiRun = (question: string, afterTs?: number) => {
     const notesSockets = [...sockets].filter(socket => socket.data.path === "/ws/notes");
     if (notesSockets.length === 0) {
       console.warn("[ctl] render_visual requested but no screenshare is connected to /ws/notes");
       return;
     }
-    const serialized = JSON.stringify({ type: "agui_run", question });
+    const serialized = JSON.stringify({ type: "agui_run", question, afterTs });
     for (const socket of notesSockets) {
       socket.send(serialized);
     }
@@ -202,9 +202,9 @@ export function startCtlServer(
 
   // Voice-triggered generative UI: tell the screenshare to run the headless
   // CopilotKit agent, which fetches the Talon-built VisualSpec from /api/visual.
-  const renderVisual = (input: { question: string }): void => {
+  const renderVisual = (input: { question: string; afterTs?: number }): void => {
     console.log(`[ctl] render_visual -> agui run: ${input.question}`);
-    broadcastAguiRun(input.question);
+    broadcastAguiRun(input.question, input.afterTs);
   };
 
   const speaker = { id: "meeting", displayName: "Participant" };

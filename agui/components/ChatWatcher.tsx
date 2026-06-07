@@ -77,13 +77,19 @@ export function ChatWatcher() {
             type?: string;
             event?: ChatEvent;
             question?: string;
+            afterTs?: number;
           };
           if (message.type === "chat" && message.event) {
             applyEvent(message.event);
           } else if (message.type === "agui_run" && typeof message.question === "string") {
             // Voice asked Alfred to visualize something: run the headless CopilotKit
-            // agent programmatically (the participant never types).
-            ask(message.question);
+            // agent programmatically (the participant never types). `afterTs` keeps
+            // the chart after the user prompt + waveform in the shared timeline.
+            const afterTs =
+              typeof message.afterTs === "number" && Number.isFinite(message.afterTs)
+                ? message.afterTs
+                : undefined;
+            ask(message.question, afterTs);
           }
         } catch {
           // Ignore non-JSON / non-chat frames.
