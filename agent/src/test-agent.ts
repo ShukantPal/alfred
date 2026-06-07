@@ -26,9 +26,9 @@ try {
   console.log(`[agent:test] ui/rest=${info.uiEndpoint}`);
   console.log(`[agent:test] data=${info.dataDir}`);
   console.log(`[agent:test] workspace=${info.workspaceDir}`);
-  if (info.mcpTarget) {
-    const mcpArgs = info.mcpArgs?.length ? ` ${info.mcpArgs.join(" ")}` : "";
-    console.log(`[agent:test] mcp ${info.mcpServerName} ${info.mcpTransport} -> ${info.mcpTarget}${mcpArgs}`);
+  for (const mcp of info.mcpServers) {
+    const mcpArgs = mcp.args.length ? ` ${mcp.args.join(" ")}` : "";
+    console.log(`[agent:test] mcp ${mcp.name} ${mcp.transport} -> ${mcp.target}${mcpArgs}`);
   }
 
   for (let i = 0; i < args.repeat; i += 1) {

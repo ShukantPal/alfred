@@ -10,9 +10,9 @@ console.log(
   `[agent] configured Talon namespace=${info.namespace} agent=${info.agentName} grpc=${info.grpcEndpoint}`,
 );
 console.log(`[agent] Talon UI/REST ${info.uiEndpoint}`);
-if (info.mcpTarget) {
-  const args = info.mcpArgs?.length ? ` ${info.mcpArgs.join(" ")}` : "";
-  console.log(`[agent] company-memory MCP ${info.mcpServerName} ${info.mcpTransport} -> ${info.mcpTarget}${args}`);
+for (const mcp of info.mcpServers) {
+  const args = mcp.args.length ? ` ${mcp.args.join(" ")}` : "";
+  console.log(`[agent] MCP ${mcp.name} ${mcp.transport} -> ${mcp.target}${args}`);
 }
 
 let closing = false;

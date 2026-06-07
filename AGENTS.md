@@ -1,8 +1,8 @@
 # Project Context — Meeting-Native Company Agent (WeaveHacks 4)
 
 > This file is the source of truth for AI coding tools (Claude Code, Codex). Read it fully
-> before generating or editing code. It describes the WHOLE monorepo and the contract in
-> `agent/src/protocol.ts`.
+> before generating or editing code. It describes the WHOLE monorepo and the ctl/agent
+> contract in `agent/src/types.ts`.
 
 ## What we are building (one line)
 A bot that joins a company's meetings, holds company-wide context (Google Drive docs, Slack,
@@ -15,7 +15,7 @@ A user needs to ask a colleague (Priya) whether the onboarding redesign is safe 
 prod. Priya is on PTO. Instead of waiting, the user asks the agent in a live meeting. The agent
 retrieves Priya's owned docs/Slack from memory, finds the blocking note ("don't ship until the
 empty-workspace race is fixed"), and answers directly — then can present the relevant doc on
-screen. Seed data for exactly this is in `agent/src/seed.ts`.
+screen. Seed data for exactly this is in `agent/src/company-memory.ts`.
 
 ## Architecture (from the team whiteboard — do not deviate without flagging)
 Three top-level layers. **All TypeScript.** ESM modules.
@@ -23,28 +23,29 @@ Three top-level layers. **All TypeScript.** ESM modules.
 ```
 ctl/            Meeting control plane. Entry-point CLI: `bun run demo https://meet.google.com/XYZ`
                 Owns meeting I/O via Recall.ai (audio in/out, screen share, video, recording).
-                Owns STT (speech->text) and TTS (text->speech). Owns "address detection"
-                (is the agent being spoken to?). Talks to agent/ over ONE WebSocket per meeting.
+                Owns OpenAI Realtime voice, wake-word/address detection, and side-effect tools.
+                When the voice model calls `delegate_to_company_agent`, ctl invokes agent/ as a
+                TypeScript library.
 
-agent/          Owns MEMORY + HARNESS. Exposes RPCs over WebSocket:
-                  in : sendMessage (text utterance), session (open/close)
-                  out: agentMessage (streaming text), agentAction, agentTrace, agentError
-                Live orchestrator agent that DELEGATES to subagents. No meeting/audio code here.
+agent/          Owns company-memory delegation through a local Talon runtime. It configures a
+                Talon agent, attaches MCP servers, creates/reuses a Talon session per meeting,
+                streams the Talon response, and returns text to ctl. No meeting/audio code here.
 
 computer-use/   MCP server that lets the agent log into a URL and present it, then connects to
                 ctl/ to screen-share it. Entry: `bun run demo-computer-use https://docs.google.com/XYZ`
                 Use Browserbase for the browser. Record/pipe to Recall.ai.
 ```
 
-Data/memory: **Redis** ("Redis Iris") — seeded with Slack/chat + Google Docs context, plus
-per-meeting working memory. Vector search via RediSearch is the upgrade path (see below).
+Data/memory: the current demo uses `agent/src/memory-mcp.ts` over stdio with seeded mock company
+context. Redis remains the intended production memory layer via an external company-memory MCP
+(`TALON_COMPANY_MCP_URL` or `REDIS_MCP_URL`).
 
 ## Sponsor mapping (this hackathon — using these well wins prizes)
 - **Weave (W&B)** — REQUIRED. Tracing/observability. Every agent + subagent node is a `weave.op`
   so the trace renders as the delegation tree. `weave.init(project)` at server startup. This is
   also the "harness sophistication" judging criterion made visible. Best Use of Weave: $1k.
-- **Redis** — memory layer. Keep it central; upgrade `Memory.retrieve` to RediSearch KNN vector
-  search to compete for Best Use of Redis (keyboards + credits + hoodies).
+- **Redis** — production memory layer. Keep the MCP boundary central; migrate the current seeded
+  stdio MCP to a Redis-backed MCP and then upgrade retrieval to RediSearch KNN.
 - **CopilotKit / AG-UI** — for the stretch-goal product UI (live agent UI in a frontend). Best
   Use of CopilotKit: AirPods Max.
 - **Recall.ai** — meeting bot I/O (lives in ctl/ and computer-use/). Not a prize sponsor but the
@@ -52,77 +53,68 @@ per-meeting working memory. Vector search via RediSearch is the upgrade path (se
   natural choice if real-time voice turn-taking gets hard.)
 - **OpenAI, Cursor** — general sponsors/credits.
 
-## The contract between ctl/ and agent/ (READ `agent/src/protocol.ts`)
-WebSocket + JSON. One socket per meeting. "RPC" = a typed envelope with a `correlationId` so a
-streamed response matches its request.
+## The contract between ctl/ and agent/ (READ `agent/src/types.ts`)
+`agent/` exports a TypeScript library used by ctl:
 
-Inbound (ctl/ -> agent/):
-- `sendMessage { correlationId, meetingId, speaker{id,displayName}, text, ts, addressedToAgent }`
-- `session { action: "open"|"close", meetingId, participants? }`
+- `createTalonCompanyDelegateFromEnv(process.env)` creates a `CompanyDelegate`.
+- `CompanyDelegate.ready()` starts Talon, configures the namespace/agent, and attaches MCPs.
+- `CompanyDelegate.ask({ meetingId, speaker, question })` sends one delegated question to a
+  meeting-scoped Talon session and returns the answer text.
+- `CompanyDelegate.close()` stops the local Talon node.
 
-Outbound (agent/ -> ctl/):
-- `agentMessage { correlationId, meetingId, delta, done }`  ← stream tokens; pipe delta to TTS/screen
-- `agentAction  { ..., action: presentUrl|postSlack|createLinearIssue, requiresConfirmation }`
-- `agentTrace   { ..., node, event:"start"|"finish", detail? }`  ← live delegation tree
-- `agentError   { ..., message }`
-
-KEY RULE: the agent only produces a turn when `addressedToAgent === true`. All other utterances
-are logged to working memory but NOT answered, so the bot doesn't talk over human crosstalk.
-ctl/ is responsible for setting `addressedToAgent` (wake word / direct-address detection).
+KEY RULE: ctl decides when the voice model may respond. ctl performs wake-word/address detection
+and the Realtime model only delegates after an addressed turn. agent/ is only called from the
+voice model's `delegate_to_company_agent` tool path.
 
 ## agent/ internals
-- `agent/src/protocol.ts` — the wire contract (zod-validated inbound, typed outbound). SOURCE OF TRUTH.
-- `agent/src/memory.ts`   — Redis memory: company context (ContextDoc with `owner`) + per-meeting turns.
-                           Has an in-memory FALLBACK if Redis is unreachable (demo-safe; not for prod).
-                           `retrieve()` is keyword-scored now — swap for RediSearch KNN to win Redis.
-- `agent/src/harness.ts`  — orchestrator -> subagents (docs/people/memory) -> synthesizer (streams out).
-                           Orchestrator + subagents use a FAST model; synthesis uses a SMART model.
-                           Every node is a weave.op.
-- `agent/src/llm.ts`      — LLM provider: ONE OpenAI-compatible client (W&B Inference or OpenAI),
-                           wrapped with `weave.wrapOpenAI` so every chat call is traced from the start.
-- `agent/src/server.ts`   — WebSocket server exposing the RPCs; `weave.init` here.
-- `agent/src/seed.ts`     — seeds the holiday use case.
-- `agent/src/demo-client.ts` — simulates ctl/ to exercise the layer without meeting plumbing.
+- `agent/src/types.ts`          — delegate interface used by ctl.
+- `agent/src/talon.ts`          — starts Talon, configures provider, namespace, MCPs, agent, sessions.
+- `agent/src/memory-mcp.ts`     — built-in stdio MCP server for seeded company memory.
+- `agent/src/company-memory.ts` — seeded holiday/onboarding context used by the MCP server.
+- `agent/src/observability.ts`  — Weave initialization.
+- `agent/src/server.ts`         — long-running Talon bootstrap process for debugging.
+- `agent/src/demo-client.ts`    — one-shot Talon delegation demo.
+- `agent/src/test-agent.ts`     — CLI entrypoint for testing the delegate.
 
-## LLM provider (OpenAI-compatible; W&B Inference default)
-We use the OpenAI SDK against an OpenAI-compatible endpoint, switchable via `LLM_PROVIDER`:
-- `wandb` (DEFAULT) — **W&B Inference** at `https://api.inference.wandb.ai/v1`. The SAME
-  `WANDB_API_KEY` powers BOTH inference and Weave tracing — one key lights up everything.
-- `openai` — OpenAI directly with `OPENAI_API_KEY`.
-The client is wrapped with `weave.wrapOpenAI`, so each `chat.completions.create` is a Weave
-span nested under its owning `weave.op` node (orchestrator/docs/people/synth). Weave from the
-get-go — no extra instrumentation needed for LLM calls.
+## LLM provider (OpenAI-compatible)
+Talon is configured with one OpenAI-compatible provider, switchable via `LLM_PROVIDER`:
+- `openai` (DEFAULT) — OpenAI directly with `OPENAI_API_KEY`.
+- `wandb` — W&B Inference at `https://api.inference.wandb.ai/v1` with `WANDB_API_KEY`.
 
-### Models (config, change freely — see `agent/src/llm.ts`)
-- wandb  → FAST `Qwen/Qwen3-30B-A3B-Instruct-2507` (orchestrator + spawned subagents),
-           SMART `Qwen/Qwen3-235B-A22B-Instruct-2507` (synthesis + tool/action decisions)
-- openai → FAST `gpt-4o-mini`, SMART `gpt-4o`
-Both wandb models are *Instruct* (non-thinking) for low live-meeting latency and strong
-tool-calling — the agent fans out to subagents and calls tools (Drive, present). Override any with
-`FAST_MODEL` / `SMART_MODEL` / `LLM_BASE_URL`. If tool-calling proves flaky, swap SMART to
-`nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-FP8` (purpose-built agentic). Keep subagents on the
-fast model — slow sequential calls compound into latency.
+`OPENAI_API_KEY`, `WANDB_API_KEY`, and `TALON_JWT_SECRET` are required by the current setup.
+Override the delegate model with `TALON_MODEL`; default is `gpt-4.1-mini` for OpenAI or
+`ibm-granite/granite-4.1-8b` for W&B Inference.
+
+Weave remains required instrumentation. `agent/src/talon.ts` wraps Talon startup, bootstrap, and
+ask operations with `weave.op`, and `WEAVE_PROJECT` controls the project name.
 
 ## Run (agent/ only)
 ```
-cp agent/.env.example agent/.env  # set WANDB_API_KEY (default provider); REDIS_URL optional (fallback)
+cp agent/.env.example agent/.env  # set OPENAI_API_KEY, WANDB_API_KEY, TALON_JWT_SECRET
 bun install                 # run from repo root
-bun run agent:dev           # start WebSocket server on ws://localhost:8787
-bun run agent:seed          # seed company context (use real Redis so server shares the store)
-bun run agent:demo          # simulate ctl/: asks the holiday question, prints streamed answer + trace
+bun run agent:dev           # start a local Talon node and keep it alive
+bun run agent:demo          # asks the holiday question, prints the answer, exits
+bun run agent:test -- --interactive
 ```
-Env: `WANDB_API_KEY` (default provider + Weave), or `OPENAI_API_KEY` with `LLM_PROVIDER=openai`;
-plus optional `REDIS_URL`, `WEAVE_PROJECT`, `AGENT_PORT`. See `agent/.env.example`.
-NOTE: seed and server are separate processes — with the in-memory fallback the seed won't be
-visible to the server. Run a real Redis (`docker run -p 6379:6379 redis`) so both share state.
+Env: see `agent/.env.example`.
+
+MCPs:
+- The built-in `company-memory` stdio MCP always attaches unless replaced by
+  `TALON_COMPANY_MCP_URL` or `REDIS_MCP_URL`.
+- Google Workspace MCP is optional and read-only by default. It is only attached when
+  Google OAuth env credentials are set, or a client secret file exists via
+  `GOOGLE_CLIENT_SECRET_PATH` / `GOOGLE_CLIENT_SECRETS` / repo-root `client_secret.json`, and the
+  stdio command (`uvx` by default) is executable.
+- DuckDuckGo search MCP is optional, no-auth, and read-only. It is attached with
+  `uvx duckduckgo-mcp-server` by default when `uvx` is executable.
 
 ## What to build next (priorities for the other layers / agents)
-1. **ctl/** — Recall.ai bot join + STT + TTS + address detection; open one WS to agent/ per
-   meeting; pipe `agentMessage.delta` to TTS and screen. Implement `agentAction` execution with
-   a HUMAN CONFIRMATION step for anything side-effectful (present, Slack, Linear).
-2. **computer-use/** — Browserbase MCP: log into a Google Doc URL, render/present it, hand the
-   shareable view to ctl/. Triggered by an `agentAction { presentUrl }`.
-3. **Redis upgrade** — embeddings + RediSearch FT.SEARCH KNN in `Memory.retrieve` (same interface).
+1. **Google Workspace MCP validation** — complete OAuth setup and verify Talon can retrieve Gmail,
+   Drive, Docs, and Calendar context through stdio tools.
+2. **Redis upgrade** — replace the seeded company-memory stdio MCP with the Redis-backed MCP,
+   then add embeddings + RediSearch KNN retrieval.
+3. **computer-use/** — Browserbase MCP: log into a Google Doc URL, render/present it, hand the
+   shareable view to ctl/. Triggered through a ctl-side voice tool with human confirmation.
 4. **Proactive watcher (optional, on the whiteboard)** — an always-on subagent that monitors the
    transcript for factual errors / off-track / compliance and emits an agentAction (e.g. DM in
    Slack). This is a DIFFERENT trigger model from `addressedToAgent` — build as a separate watcher,
@@ -136,11 +128,11 @@ visible to the server. Run a real Redis (`docker run -p 6379:6379 redis`) so bot
   real person's private docs live.
 - **Side effects require confirmation**: never auto-send Slack/Linear/email or auto-present without
   the `requiresConfirmation` gate honored in ctl/.
-- **Ground answers in retrieved context**; if context is missing, the agent says so rather than
-  guessing (already enforced in the synthesizer system prompt).
+- **Ground answers in retrieved context**; if context is missing, the delegate says so rather than
+  guessing.
 
 ## Conventions
 - TypeScript, ESM (`"type": "module"`), Node 20+. Strict mode on.
-- Validate all inbound frames with zod (see `agent/src/protocol.ts`). Outbound frames are plain typed objects.
-- Wrap every agent/subagent reasoning step in `weave.op` so it shows in the trace.
-- Keep the protocol stable: if you change it, change `agent/src/protocol.ts` and update this file in the same commit.
+- Keep the ctl/agent interface stable in `agent/src/types.ts`; update this file in the same commit
+  if that contract changes.
+- Wrap Talon startup, bootstrap, and delegated ask operations in `weave.op` so they show in traces.

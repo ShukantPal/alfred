@@ -57,6 +57,11 @@ interface RealtimeOutputItem {
   arguments?: string;
 }
 
+interface TimedDelegateAnswer {
+  answer: string;
+  expiresAt: number;
+}
+
 export class OpenAIRealtimeVoice {
   private readonly apiKey?: string;
   private readonly model: string;
@@ -91,6 +96,10 @@ export class OpenAIRealtimeVoice {
   private activeAudioId?: string;
   private lastAssistantItemId?: string;
   private lastAudioStartedAt?: number;
+  private suppressResponseAudio = false;
+  private readonly handledFunctionCallIds = new Set<string>();
+  private readonly delegateAnswersByQuestion = new Map<string, TimedDelegateAnswer>();
+  private readonly delegateInFlightByQuestion = new Map<string, Promise<string>>();
 
   constructor(options: OpenAIRealtimeVoiceOptions) {
     this.apiKey = options.apiKey;
@@ -246,14 +255,14 @@ export class OpenAIRealtimeVoice {
             type: "function",
             name: "delegate_to_company_agent",
             description:
-              "Ask Alfred's Talon-backed company-memory delegate for factual answers from company docs, Slack context, project memory, and meeting context.",
+              "Ask Alfred's Talon-backed delegate for internal company facts from company docs, Slack/project/meeting context, or for current public web lookup when needed.",
             parameters: {
               type: "object",
               properties: {
                 question: {
                   type: "string",
                   description:
-                    "A concise standalone question for the company-memory agent.",
+                    "A concise standalone question for the delegate, including whether it needs company context or public web context.",
                 },
               },
               required: ["question"],
@@ -307,6 +316,7 @@ export class OpenAIRealtimeVoice {
         this.flushQueuedAudio();
         return;
       case "response.created":
+        this.suppressResponseAudio = false;
         console.log("[ctl] realtime response created");
         return;
       case "conversation.item.input_audio_transcription.completed":
@@ -319,6 +329,10 @@ export class OpenAIRealtimeVoice {
       case "response.output_item.added":
         if (event.item?.type) {
           console.log(`[ctl] realtime response output item ${event.item.type}${event.item.name ? `:${event.item.name}` : ""}`);
+        }
+        if (event.item?.type === "function_call") {
+          this.suppressResponseAudio = true;
+          this.clearPlaybackForToolCall();
         }
         return;
       case "response.output_audio.delta":
@@ -374,7 +388,7 @@ export class OpenAIRealtimeVoice {
   }
 
   private handleAudioDelta(event: RealtimeEvent): void {
-    if (!event.delta) return;
+    if (!event.delta || this.suppressResponseAudio) return;
     const id = event.response_id ?? this.activeAudioId ?? crypto.randomUUID();
     if (!this.activeAudioId) {
       this.activeAudioId = id;
@@ -407,15 +421,45 @@ export class OpenAIRealtimeVoice {
     this.lastAudioStartedAt = undefined;
   }
 
+  private clearPlaybackForToolCall(): void {
+    if (!this.activeAudioId) return;
+    console.log("[ctl] clearing pre-tool realtime audio");
+    this.onAudioClear();
+    this.activeAudioId = undefined;
+    this.lastAudioStartedAt = undefined;
+  }
+
   private async handleFunctionCalls(items: RealtimeOutputItem[]): Promise<void> {
     let handledAny = false;
+    let handledDelegate = false;
     for (const item of items) {
       if (item.type !== "function_call") continue;
 
       const callId = item.call_id;
       if (!callId) continue;
+      if (this.handledFunctionCallIds.has(callId)) {
+        console.log(`[ctl] realtime function call already handled call_id=${callId}`);
+        continue;
+      }
+      this.handledFunctionCallIds.add(callId);
 
-      const output = await this.handleFunctionCall(item);
+      if (item.name === "delegate_to_company_agent" && handledDelegate) {
+        console.log(
+          `[ctl] realtime duplicate delegate call skipped call_id=${callId} args=${truncateForLog(item.arguments ?? "", 240)}`,
+        );
+        this.sendFunctionOutput(callId, {
+          status: "skipped",
+          reason:
+            "Duplicate delegate_to_company_agent call in the same response. Use the first delegate result.",
+        });
+        handledAny = true;
+        continue;
+      }
+      if (item.name === "delegate_to_company_agent") {
+        handledDelegate = true;
+      }
+
+      const output = await this.handleFunctionCallSafely(item);
       this.sendFunctionOutput(callId, output);
       handledAny = true;
     }
@@ -425,18 +469,31 @@ export class OpenAIRealtimeVoice {
     }
   }
 
+  private async handleFunctionCallSafely(item: RealtimeOutputItem): Promise<Record<string, unknown>> {
+    try {
+      return await this.handleFunctionCall(item);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`[ctl] realtime function ${item.name ?? "<missing>"} failed`, error);
+      return {
+        status: "failed",
+        error: message,
+      };
+    }
+  }
+
   private async handleFunctionCall(item: RealtimeOutputItem): Promise<Record<string, unknown>> {
     switch (item.name) {
       case "delegate_to_company_agent": {
         const args = parseFunctionArgs(item.arguments);
         const question = typeof args.question === "string" ? args.question.trim() : "";
-        const answer = question
-          ? await this.delegate.ask({
-              meetingId: this.meetingId,
-              speaker: this.speaker,
-              question,
-            })
-          : "No question was provided for delegation.";
+        if (question) {
+          console.log(`[ctl] realtime delegate question: ${truncateForLog(question, 240)}`);
+        }
+        const answer = question ? await this.askDelegateOnce(question) : "No question was provided for delegation.";
+        console.log(
+          `[ctl] realtime delegate answer ${answer.length} chars: ${truncateForLog(answer, 320)}`,
+        );
         return { answer };
       }
       case "start_screenshare":
@@ -457,6 +514,50 @@ export class OpenAIRealtimeVoice {
     }
   }
 
+  private async askDelegateOnce(question: string): Promise<string> {
+    const cacheKey = normalizeDelegateQuestion(question);
+    const now = Date.now();
+    const cached = this.delegateAnswersByQuestion.get(cacheKey);
+    if (cached && cached.expiresAt > now) {
+      console.log("[ctl] realtime delegate cache hit");
+      return cached.answer;
+    }
+
+    const existing = this.delegateInFlightByQuestion.get(cacheKey);
+    if (existing) {
+      console.log("[ctl] realtime delegate call already in flight");
+      return existing;
+    }
+
+    const request = this.delegate
+      .ask({
+        meetingId: this.meetingId,
+        speaker: this.speaker,
+        question,
+      })
+      .then(answer => {
+        this.delegateAnswersByQuestion.set(cacheKey, {
+          answer,
+          expiresAt: Date.now() + 60_000,
+        });
+        return answer;
+      })
+      .finally(() => {
+        this.delegateInFlightByQuestion.delete(cacheKey);
+        this.pruneDelegateAnswerCache();
+      });
+
+    this.delegateInFlightByQuestion.set(cacheKey, request);
+    return request;
+  }
+
+  private pruneDelegateAnswerCache(): void {
+    const now = Date.now();
+    for (const [key, value] of this.delegateAnswersByQuestion) {
+      if (value.expiresAt <= now) this.delegateAnswersByQuestion.delete(key);
+    }
+  }
+
   private sendFunctionOutput(callId: string, output: Record<string, unknown>): void {
     this.send({
       type: "conversation.item.create",
@@ -474,6 +575,7 @@ export class OpenAIRealtimeVoice {
       type: "response.create",
       response: {
         output_modalities: ["audio"],
+        instructions: responseInstructions(reason),
       },
     });
   }
@@ -528,22 +630,33 @@ export function createOpenAIRealtimeVoiceFromEnv(
 }
 
 function defaultInstructions(): string {
-  return `You are Alfred, a meeting-native company agent. You listen in a live meeting and respond by voice.
+  return `You are Alfred, a concise voice assistant in a live meeting. You can help with ordinary questions, meeting discussion, reasoning, and company-context lookups.
 
 # Addressing
 Only speak when someone directly addresses Alfred or clearly asks the meeting bot for help. If people are talking to each other, stay silent.
 
-# Company Memory Delegation
-For factual questions about company docs, Slack/project context, call delegate_to_company_agent before answering. The delegation result is authoritative. If it says context is missing, say that plainly.
+# Answering
+Answer normal addressed questions directly when you can do so without private company context or current external lookup.
+
+# Delegation
+Call delegate_to_company_agent for factual questions that need internal company docs, Slack/project/meeting context, colleague notes, or current public web lookup. For delegated questions, do not speak before the tool result is available. Call the tool at most once for a user question, then answer using that result. The delegation result is authoritative. If it says context is missing, say that plainly.
 
 # Screenshare
 When the user asks Alfred to share the screen, show the screen, present, or start screenshare, call start_screenshare. Confirm briefly after the tool returns.
 
 # Voice Style
-Be concise, natural, and direct. Speak at a brisk conversational pace, not slowly. Answer in one sentence by default, two only when necessary. Do not add filler, throat-clearing, or long acknowledgements. If you need the delegation tool, use only a short preamble like "Let me check."
+Be concise, natural, and direct. Speak at a brisk conversational pace, not slowly. Answer in one sentence by default, two only when necessary. Do not add filler, throat-clearing, long acknowledgements, or tool-use preambles.
 
 # Guardrails
-Do not claim access to real private documents beyond the mocked seeded context. Do not perform side effects without explicit confirmation.`;
+Do not claim access to private company information unless it came from the delegation result. Do not perform side effects without explicit confirmation.`;
+}
+
+function responseInstructions(reason: string): string {
+  if (reason === "function output") {
+    return "Answer the user using only the available function output. Do not call another tool. Be concise and direct.";
+  }
+
+  return "If the user's request needs internal company context or current public information, call the appropriate tool silently and do not produce spoken content before the tool result. Otherwise answer concisely by voice.";
 }
 
 function parseRealtimeEvent(data: unknown): RealtimeEvent | undefined {
@@ -573,6 +686,10 @@ function summarizeResponseOutput(items: RealtimeOutputItem[]): string {
     .join(",");
 }
 
+function truncateForLog(value: string, maxLength: number): string {
+  return value.length > maxLength ? `${value.slice(0, maxLength - 1)}…` : value;
+}
+
 function resamplePcm16(audio: Uint8Array, fromRate: number, toRate: number): Uint8Array {
   if (fromRate <= 0 || toRate <= 0 || fromRate === toRate || audio.byteLength < 2) return audio;
 
@@ -598,6 +715,10 @@ function resamplePcm16(audio: Uint8Array, fromRate: number, toRate: number): Uin
 
 function normalizeWakeWord(value: string): string {
   return normalizeText(value) || "alfred";
+}
+
+function normalizeDelegateQuestion(value: string): string {
+  return normalizeText(value) || value.trim().toLowerCase();
 }
 
 function normalizeText(value: string): string {
