@@ -1,7 +1,7 @@
 import type { Server, ServerWebSocket } from "bun";
 import { createTalonCompanyDelegateFromEnv, type ActionItem } from "@alfred/agent";
 import { extractRecallMixedAudio } from "./recall/audio";
-import { createOpenAIRealtimeVoiceFromEnv } from "./realtime/openai";
+import { createOpenAIRealtimeVoiceFromEnv, type ChatMessageEvent } from "./realtime/openai";
 import { createRouter } from "./routes";
 import type { MeetingUtterance } from "./transcript";
 
@@ -69,6 +69,17 @@ export function startCtlServer(
       socket.send(serialized);
     }
   };
+  // Push chat-mode events (delegated question + Alfred's voice bubble) over the same
+  // /ws/notes socket for sub-second rendering on the screenshare chat view; the agui
+  // HTTP buffer (POST below) remains the source of truth for catch-up polling.
+  const broadcastChatToNotes = (event: ChatMessageEvent) => {
+    const notesSockets = [...sockets].filter(socket => socket.data.path === "/ws/notes");
+    if (notesSockets.length === 0) return;
+    const serialized = JSON.stringify({ type: "chat", event });
+    for (const socket of notesSockets) {
+      socket.send(serialized);
+    }
+  };
   // Retain the full meeting transcript so the end-of-meeting action-item subagent
   // has the whole conversation. Generous cap as a memory guard, not a feature limit.
   const meetingTranscript: MeetingUtterance[] = [];
@@ -87,6 +98,14 @@ export function startCtlServer(
       return;
     }
     void postUtteranceToAgui(aguiBaseUrl, utterance);
+  };
+
+  // Forward a chat-mode event to the screenshare surface: instant WS push plus the
+  // agui HTTP buffer for catch-up. Deterministic side-effect of the delegate path.
+  const forwardChatMessage = (event: ChatMessageEvent) => {
+    broadcastChatToNotes(event);
+    if (!aguiBaseUrl) return;
+    void postChatMessageToAgui(aguiBaseUrl, event);
   };
 
   // Hand agui ctl's public URL so the screenshare page can derive the notes WS
@@ -176,6 +195,7 @@ export function startCtlServer(
       sendMediaJson(sockets, { type: "status", message });
     },
     onUtterance: forwardUtterance,
+    onChatMessage: forwardChatMessage,
     onAudioStart(id, sampleRate) {
       sendMediaJson(sockets, {
         type: "speak_stream_start",
@@ -344,6 +364,21 @@ async function postUtteranceToAgui(baseUrl: string, utterance: MeetingUtterance)
     }
   } catch (error) {
     console.warn("[ctl] agui transcript POST failed", error);
+  }
+}
+
+async function postChatMessageToAgui(baseUrl: string, event: ChatMessageEvent): Promise<void> {
+  try {
+    const response = await fetch(`${baseUrl}/api/meeting/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(event),
+    });
+    if (!response.ok) {
+      console.warn(`[ctl] agui chat POST failed (${response.status})`);
+    }
+  } catch (error) {
+    console.warn("[ctl] agui chat POST failed", error);
   }
 }
 

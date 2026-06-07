@@ -24,6 +24,12 @@ export interface OpenAIRealtimeVoiceOptions {
   onStatus(message: string): void;
   /** Every final input transcript (live meeting speech), for meeting-notes forwarding. */
   onUtterance?(utterance: MeetingUtterance): void;
+  /**
+   * Chat-mode events for the screenshare surface: the user's delegated question
+   * (text bubble) and Alfred's spoken reply (a voice/waveform bubble that settles
+   * when the spoken answer ends). Deterministic forwarding — not a weave.op.
+   */
+  onChatMessage?(event: ChatMessageEvent): void;
   onAudioStart(id: string, sampleRate: number): void;
   onAudio(bytes: Uint8Array): void;
   onAudioEnd(id: string): void;
@@ -44,6 +50,16 @@ export interface OpenAIRealtimeVoiceOptions {
     status: string;
     title?: string;
   }>;
+}
+
+/** A chat event ctl forwards to the agui screenshare chat view. */
+export interface ChatMessageEvent {
+  op: "add" | "update";
+  id?: string;
+  role?: "user" | "alfred";
+  kind?: "text" | "voice";
+  text?: string;
+  status?: "thinking" | "speaking" | "done";
 }
 
 type ConnectionState = "idle" | "connecting" | "open" | "ready" | "closed";
@@ -103,6 +119,7 @@ export class OpenAIRealtimeVoice {
   private readonly delegate: CompanyDelegate;
   private readonly onStatus: (message: string) => void;
   private readonly onUtterance?: (utterance: MeetingUtterance) => void;
+  private readonly onChatMessage?: (event: ChatMessageEvent) => void;
   private readonly onAudioStart: (id: string, sampleRate: number) => void;
   private readonly onAudio: (bytes: Uint8Array) => void;
   private readonly onAudioEnd: (id: string) => void;
@@ -128,6 +145,18 @@ export class OpenAIRealtimeVoice {
   private readonly handledFunctionCallIds = new Set<string>();
   private readonly delegateAnswersByQuestion = new Map<string, TimedDelegateAnswer>();
   private readonly delegateInFlightByQuestion = new Map<string, Promise<string>>();
+  // The id of the Alfred voice bubble awaiting its spoken answer; settled to
+  // "done" when the next non-function-call response finishes (the spoken reply).
+  private pendingChatAnswerId?: string;
+  // The most recent final user STT, shown verbatim in the chat user bubble (the
+  // delegate tool argument is a model reformulation, not what the user said).
+  private lastUserTranscript?: string;
+  // Playback bookkeeping so Alfred's waveform settles when the meeting audio
+  // actually finishes. response.done fires earlier because Realtime streams audio
+  // faster than realtime playback, so we estimate the end from the PCM bytes sent.
+  private pendingChatAudioStartedAt?: number;
+  private pendingChatAudioBytes = 0;
+  private pendingChatSettleTimer?: ReturnType<typeof setTimeout>;
 
   constructor(options: OpenAIRealtimeVoiceOptions) {
     this.apiKey = options.apiKey;
@@ -152,6 +181,7 @@ export class OpenAIRealtimeVoice {
     this.delegate = options.delegate;
     this.onStatus = options.onStatus;
     this.onUtterance = options.onUtterance;
+    this.onChatMessage = options.onChatMessage;
     this.onAudioStart = options.onAudioStart;
     this.onAudio = options.onAudio;
     this.onAudioEnd = options.onAudioEnd;
@@ -446,6 +476,7 @@ export class OpenAIRealtimeVoice {
         }
         this.endActiveAudio(event.response?.id);
         this.responseInProgress = false;
+        this.settlePendingChatAnswer(event.response?.output ?? []);
         await this.handleFunctionCalls(event.response?.output ?? []);
         this.flushPendingResponse();
         return;
@@ -470,12 +501,38 @@ export class OpenAIRealtimeVoice {
       ts: Date.now(),
     });
 
-    if (!normalized.includes(this.wakeWord)) {
-      console.log("[ctl] realtime turn ignored; wake word not present");
+    // An utterance addresses Alfred only when it opens with the wake word,
+    // optionally after a short lead-in ("hey alfred", "ok so alfred"). Other speech
+    // stays in the Realtime conversation as context but never triggers a response,
+    // so saying just "Alfred" won't make Alfred answer earlier chatter — the answer
+    // must come from this addressed utterance.
+    if (!this.isAddressedToAlfred(normalized)) {
+      console.log("[ctl] realtime turn ignored; not addressed to Alfred");
       return;
     }
 
+    // Remember the addressed turn's raw STT so a subsequent delegate shows the
+    // user's own words in the chat bubble rather than the model's reformulated
+    // delegate question.
+    this.lastUserTranscript = transcript.trim();
+
     this.createAudioResponse("wake word");
+  }
+
+  // True when the utterance opens with the wake word, optionally preceded by a few
+  // allowed lead-in words ("hey alfred", "ok so alfred"). Rejects mid-sentence
+  // mentions ("I asked alfred earlier") so only addressed turns trigger a response.
+  private isAddressedToAlfred(normalized: string): boolean {
+    const wakeTokens = this.wakeWord.split(" ").filter(Boolean);
+    if (wakeTokens.length === 0) return false;
+    const tokens = normalized.split(" ").filter(Boolean);
+
+    for (let start = 0; start <= MAX_WAKE_LEAD_IN_WORDS; start += 1) {
+      if (start + wakeTokens.length > tokens.length) break;
+      if (!tokens.slice(0, start).every(token => WAKE_LEAD_IN_WORDS.has(token))) break;
+      if (wakeTokens.every((word, index) => tokens[start + index] === word)) return true;
+    }
+    return false;
   }
 
   private flushQueuedAudio(): void {
@@ -492,8 +549,17 @@ export class OpenAIRealtimeVoice {
       this.activeAudioId = id;
       this.lastAudioStartedAt = Date.now();
       this.onAudioStart(id, this.outputSampleRate);
+      // The spoken answer is now playing — flip the pending chat bubble from
+      // "thinking" (dots) to "speaking" (waveform) and start tracking playback.
+      if (this.pendingChatAnswerId) {
+        this.pendingChatAudioStartedAt = Date.now();
+        this.pendingChatAudioBytes = 0;
+        this.onChatMessage?.({ op: "update", id: this.pendingChatAnswerId, status: "speaking" });
+      }
     }
-    this.onAudio(Buffer.from(event.delta, "base64"));
+    const audio = Buffer.from(event.delta, "base64");
+    if (this.pendingChatAnswerId) this.pendingChatAudioBytes += audio.length;
+    this.onAudio(audio);
   }
 
   private endActiveAudio(responseId?: string): void {
@@ -517,6 +583,8 @@ export class OpenAIRealtimeVoice {
     }
     this.activeAudioId = undefined;
     this.lastAudioStartedAt = undefined;
+    // Alfred was cut off — stop the waveform now rather than at the estimated end.
+    this.finalizePendingChatAnswerNow();
   }
 
   private clearPlaybackForToolCall(): void {
@@ -525,6 +593,54 @@ export class OpenAIRealtimeVoice {
     this.onAudioClear();
     this.activeAudioId = undefined;
     this.lastAudioStartedAt = undefined;
+  }
+
+  // Settle Alfred's pending chat waveform once the spoken answer finishes. The
+  // function-call response itself (which carries the delegate output) is skipped so
+  // we only act on the subsequent audio reply. response.done fires when generation
+  // completes, but the meeting audio keeps playing (it streams faster than
+  // realtime), so we schedule the "done" for the estimated playback end instead of
+  // settling immediately — otherwise the waveform stops well before Alfred does.
+  private settlePendingChatAnswer(output: RealtimeOutputItem[]): void {
+    if (!this.pendingChatAnswerId) return;
+    if (output.some(item => item.type === "function_call")) return;
+
+    const id = this.pendingChatAnswerId;
+    const samples = this.pendingChatAudioBytes / 2; // 16-bit mono PCM
+    const durationMs =
+      this.outputSampleRate > 0 ? (samples / this.outputSampleRate) * 1000 : 0;
+    const startedAt = this.pendingChatAudioStartedAt ?? Date.now();
+    // Cover the media page's scheduling lead + silence tail and a little slack so
+    // the waveform never cuts off early.
+    const PLAYBACK_TAIL_MS = 300;
+    const remainingMs = Math.max(0, startedAt + durationMs + PLAYBACK_TAIL_MS - Date.now());
+
+    this.clearPendingChatSettleTimer();
+    this.pendingChatSettleTimer = setTimeout(() => {
+      this.pendingChatSettleTimer = undefined;
+      // Guard against a newer answer having taken over in the meantime.
+      if (this.pendingChatAnswerId !== id) return;
+      this.finalizePendingChatAnswerNow();
+    }, remainingMs);
+  }
+
+  // Settle the waveform immediately (playback ended early, e.g. a barge-in
+  // interruption truncated Alfred's reply).
+  private finalizePendingChatAnswerNow(): void {
+    this.clearPendingChatSettleTimer();
+    const id = this.pendingChatAnswerId;
+    if (!id) return;
+    this.pendingChatAnswerId = undefined;
+    this.pendingChatAudioStartedAt = undefined;
+    this.pendingChatAudioBytes = 0;
+    this.onChatMessage?.({ op: "update", id, status: "done" });
+  }
+
+  private clearPendingChatSettleTimer(): void {
+    if (this.pendingChatSettleTimer) {
+      clearTimeout(this.pendingChatSettleTimer);
+      this.pendingChatSettleTimer = undefined;
+    }
   }
 
   private async handleFunctionCalls(items: RealtimeOutputItem[]): Promise<void> {
@@ -587,6 +703,28 @@ export class OpenAIRealtimeVoice {
         const question = typeof args.question === "string" ? args.question.trim() : "";
         if (question) {
           console.log(`[ctl] realtime delegate question: ${truncateForLog(question, 240)}`);
+          // Surface the Q&A on the screenshare chat view immediately, before the
+          // (slower) delegate call resolves. Show the user's own words (STT), not the
+          // model's reformulated delegate question. Stable ids so the WS push and the
+          // catch-up poll dedup to a single bubble.
+          this.onChatMessage?.({
+            op: "add",
+            id: crypto.randomUUID(),
+            role: "user",
+            kind: "text",
+            text: this.lastUserTranscript || question,
+          });
+          const alfredId = crypto.randomUUID();
+          this.pendingChatAnswerId = alfredId;
+          // Start as "thinking" (bouncing dots) while the delegate runs; flipped to
+          // "speaking" (waveform) once the spoken answer's audio actually begins.
+          this.onChatMessage?.({
+            op: "add",
+            id: alfredId,
+            role: "alfred",
+            kind: "voice",
+            status: "thinking",
+          });
         }
         const answer = question ? await this.askDelegateOnce(question) : "No question was provided for delegation.";
         console.log(
@@ -712,7 +850,10 @@ export class OpenAIRealtimeVoice {
       type: "response.create",
       response: {
         output_modalities: ["audio"],
-        instructions: responseInstructions(reason),
+        instructions: responseInstructions(
+          reason,
+          reason === "wake word" ? this.lastUserTranscript : undefined,
+        ),
       },
     });
   }
@@ -799,12 +940,18 @@ Be concise, natural, and direct. Speak at a brisk conversational pace, not slowl
 Do not claim access to private company information unless it came from the delegation result. Do not perform side effects without explicit confirmation.`;
 }
 
-function responseInstructions(reason: string): string {
+function responseInstructions(reason: string, addressedText?: string): string {
   if (reason === "function output") {
     return "Answer the user using only the available function output. Do not call another tool. Be concise and direct.";
   }
 
-  return "If the user's request needs internal company context or current public information, call the appropriate tool silently and do not produce spoken content before the tool result. Otherwise answer concisely by voice.";
+  const base =
+    "If the user's request needs internal company context or current public information, call the appropriate tool silently and do not produce spoken content before the tool result. Otherwise answer concisely by voice.";
+  const addressed = addressedText?.trim();
+  if (addressed) {
+    return `The user just addressed you with: "${addressed}". Respond only to this latest addressed request; do not answer earlier questions that were not addressed to you. If it contains no actual request, briefly ask how you can help. ${base}`;
+  }
+  return base;
 }
 
 function parseRealtimeEvent(data: unknown): RealtimeEvent | undefined {
@@ -868,6 +1015,24 @@ function normalizeWakeWord(value: string): string {
 function normalizeDelegateQuestion(value: string): string {
   return normalizeText(value) || value.trim().toLowerCase();
 }
+
+// Filler words allowed before the wake word so "hey alfred" / "ok so alfred" still
+// address Alfred. Kept short and conversational to avoid matching real sentences.
+const WAKE_LEAD_IN_WORDS = new Set([
+  "hey",
+  "hi",
+  "hello",
+  "ok",
+  "okay",
+  "yo",
+  "um",
+  "uh",
+  "so",
+  "well",
+  "there",
+]);
+// Max lead-in tokens scanned before the wake word (covers "hey there alfred").
+const MAX_WAKE_LEAD_IN_WORDS = 3;
 
 function normalizeText(value: string): string {
   return value

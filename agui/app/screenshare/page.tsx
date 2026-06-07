@@ -3,6 +3,8 @@
 import { useEffect } from "react";
 import { AlfredSidePanel } from "@/components/AlfredSidePanel";
 import { AppWorkspace } from "@/components/AppWorkspace";
+import { ChatProvider } from "@/components/ChatProvider";
+import { ChatWatcher } from "@/components/ChatWatcher";
 import { MeetingNotesProvider } from "@/components/MeetingNotesProvider";
 import { MeetingNotesWatcher } from "@/components/MeetingNotesWatcher";
 import { DEFAULT_APP_ID, documentTitleForApp, getAppTab } from "@/lib/apps";
@@ -19,14 +21,17 @@ export default function ScreensharePage() {
   return (
     <MeetingNotesProvider>
       <MeetingNotesWatcher />
-      <div className="screenshare-shell">
-        <div className="screenshare-body">
-          <AlfredSidePanel />
-          <div className="screenshare-main">
-            <AppWorkspace app={activeApp} />
+      <ChatProvider>
+        <ChatWatcher />
+        <div className="screenshare-shell">
+          <div className="screenshare-body">
+            <AlfredSidePanel />
+            <div className="screenshare-main">
+              <AppWorkspace app={activeApp} />
+            </div>
           </div>
         </div>
-      </div>
+      </ChatProvider>
     </MeetingNotesProvider>
   );
 }

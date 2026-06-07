@@ -84,6 +84,23 @@ fetches the current items, asks the Talon `matchActionItemForRemoval` subagent w
 phrase means, then removes by id (`{ op: "remove", id }`). agui retains a lenient lexical
 `{ op: "remove", title }` path as a fallback only.
 
+## Screenshare chat mode (ctl -> agui `/api/meeting/chat`)
+When the voice model calls `delegate_to_company_agent`, ctl forwards the Q&A to the agui screenshare
+surface so the main window transitions from the `AlfredLanding` view into a chat view (user questions
+as right-aligned text bubbles, Alfred's spoken reply as a left-aligned animated waveform). This is a
+DETERMINISTIC side-effect of the already-delegated path, so it is a plain ctl-side POST and is NOT
+wrapped in `weave.op` (no new reasoning, no new voice tool). Mechanism:
+- ctl emits `ChatMessageEvent`s via the `onChatMessage` callback on the Realtime voice client
+  (`ctl/src/realtime/openai.ts`): on delegate it adds `{ op:"add", role:"user", kind:"text", text }`
+  and `{ op:"add", id, role:"alfred", kind:"voice", status:"speaking" }`, then settles the waveform
+  with `{ op:"update", id, status:"done" }` when the spoken answer's `response.done` fires.
+- `ctl/src/server.ts` forwards each event over the `/ws/notes` WebSocket (`{ type:"chat", event }`)
+  for instant rendering and POSTs it to agui's `/api/meeting/chat` (the source of truth for catch-up
+  polling), mirroring the transcript/tasks transport.
+- agui buffers events in `agui/lib/chatHub.ts`, exposes them at `/api/meeting/chat`
+  (`?after=<seq>` / `?full=1`), and renders via `ChatProvider` (derives `mode: "landing" | "chat"`),
+  `ChatWatcher`, and `ChatMode`. Chat is in-memory only, like the transcript and tasks buffers.
+
 ## Voice tools: deterministic vs delegated (READ before adding a tool)
 There are two layers of model. (1) The OpenAI Realtime voice model in `ctl/src/realtime/openai.ts`
 always reasons and *picks* which tool to call. (2) What the tool then *does* is either deterministic
