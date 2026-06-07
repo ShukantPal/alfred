@@ -55,8 +55,9 @@ const nextConfig: NextConfig = {
   // The /screenshare route is streamed into meetings as video — hide the dev
   // overlay so it doesn't appear in the shared frame.
   devIndicators: false,
-  // Recall reaches agui through a Cloudflare quick tunnel in dev.
-  allowedDevOrigins: ["*.trycloudflare.com"],
+  // Recall reaches agui through a Cloudflare quick tunnel in dev. Also allow
+  // 127.0.0.1 and LAN hostnames — Next 16 blocks cross-host dev fetches by default.
+  allowedDevOrigins: ["*.trycloudflare.com", "127.0.0.1"],
 };
 
 export default nextConfig;

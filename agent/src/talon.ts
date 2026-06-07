@@ -20,6 +20,7 @@ import type {
   ActionItemStatus,
   CompanyDelegate,
   CompanyDelegateRequest,
+  ToolUseListener,
   VisualPoint,
   VisualRequest,
   VisualSpec,
@@ -72,6 +73,7 @@ export interface TalonRuntimeInfo {
 
 export class TalonCompanyDelegate implements CompanyDelegate {
   private readonly channelsByMeeting = new Map<string, Promise<string>>();
+  private readonly toolUseListeners = new Set<ToolUseListener>();
   private readonly startRuntimeOp: () => Promise<TalonRuntime>;
   private readonly bootstrapOp: (runtime: TalonRuntime) => Promise<void>;
   private readonly askOp: (request: CompanyDelegateRequest) => Promise<string>;
@@ -183,6 +185,7 @@ export class TalonCompanyDelegate implements CompanyDelegate {
           }),
           { signal: streamController.signal, timeoutMs: 0 },
         ),
+        this.toolUseCollector(request.meetingId),
       );
 
       const answer = await withTimeout(
@@ -251,6 +254,7 @@ export class TalonCompanyDelegate implements CompanyDelegate {
           }),
           { signal: streamController.signal, timeoutMs: 0 },
         ),
+        this.toolUseCollector(request.meetingId),
       );
 
       const answer = await withTimeout(
@@ -319,6 +323,7 @@ export class TalonCompanyDelegate implements CompanyDelegate {
           }),
           { signal: streamController.signal, timeoutMs: 0 },
         ),
+        this.toolUseCollector(request.meetingId),
       );
 
       const answer = await withTimeout(
@@ -389,6 +394,7 @@ export class TalonCompanyDelegate implements CompanyDelegate {
           }),
           { signal: streamController.signal, timeoutMs: 0 },
         ),
+        this.toolUseCollector(request.meetingId),
       );
 
       const answer = await withTimeout(
@@ -403,9 +409,41 @@ export class TalonCompanyDelegate implements CompanyDelegate {
     }
   }
 
+  onToolUse(listener: ToolUseListener): () => void {
+    this.toolUseListeners.add(listener);
+    return () => {
+      this.toolUseListeners.delete(listener);
+    };
+  }
+
+  // Build a per-operation tool collector: dedupes by name and notifies listeners
+  // as each new tool resolves, so ctl can highlight the integration immediately.
+  private toolUseCollector(meetingId: string): (name: string) => void {
+    const seen = new Set<string>();
+    return (name: string) => {
+      const trimmed = name.trim();
+      if (!trimmed || seen.has(trimmed)) return;
+      seen.add(trimmed);
+      this.emitToolUse(meetingId, [trimmed]);
+    };
+  }
+
+  private emitToolUse(meetingId: string, tools: string[]): void {
+    if (tools.length === 0 || this.toolUseListeners.size === 0) return;
+    const event = { meetingId, tools };
+    for (const listener of this.toolUseListeners) {
+      try {
+        listener(event);
+      } catch (error) {
+        console.error("[agent] onToolUse listener failed", error);
+      }
+    }
+  }
+
   async close(): Promise<void> {
     const runtime = await this.initPromise?.catch(() => undefined);
     this.channelsByMeeting.clear();
+    this.toolUseListeners.clear();
     await runtime?.server.stop();
   }
 
@@ -776,6 +814,7 @@ async function withTimeout<T>(
 
 async function collectTalonAnswer(
   stream: AsyncIterable<events.SessionMessagePartEvent>,
+  onTool?: (name: string) => void,
 ): Promise<string> {
   let accumulated = "";
   let completedText = "";
@@ -798,6 +837,16 @@ async function collectTalonAnswer(
       throw new Error(content || "Talon company agent stream failed.");
     }
     logSessionPartEvent(event);
+    // Surface each resolved tool call so the caller can map it to a live UI
+    // integration highlight. DONE keeps it to one signal per call (not per delta).
+    if (
+      onTool &&
+      event.kind === events.SessionMessagePartEventKind.DONE &&
+      part?.partType === models.SessionMessagePartType.TOOL_CALL &&
+      part.name
+    ) {
+      onTool(part.name);
+    }
     if (part?.partType !== models.SessionMessagePartType.TEXT) {
       continue;
     }

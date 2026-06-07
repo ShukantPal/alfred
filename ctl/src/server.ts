@@ -1,6 +1,7 @@
 import type { Server, ServerWebSocket } from "bun";
 import { createTalonCompanyDelegateFromEnv, type ActionItem } from "@alfred/agent";
 import { extractRecallMixedAudio } from "./recall/audio";
+import { panelTargetsForTool, type PanelSignalEvent } from "./panel";
 import { createOpenAIRealtimeVoiceFromEnv, type ChatMessageEvent } from "./realtime/openai";
 import { createRouter } from "./routes";
 import type { MeetingUtterance } from "./transcript";
@@ -94,6 +95,27 @@ export function startCtlServer(
       socket.send(serialized);
     }
   };
+  // Push live left-panel highlight signals to the screenshare surface. Transient
+  // (ws-only, like agui_run): the panel resets every addressed turn, so there is
+  // no catch-up buffer. Tells the panel which rows (Meeting Notes / Action Items /
+  // an integration) Alfred touched for the current prompt.
+  const broadcastPanelToNotes = (event: PanelSignalEvent) => {
+    const notesSockets = [...sockets].filter(socket => socket.data.path === "/ws/notes");
+    if (notesSockets.length === 0) return;
+    const serialized = JSON.stringify({ type: "panel", event });
+    for (const socket of notesSockets) {
+      socket.send(serialized);
+    }
+  };
+  // The delegate reports each MCP/tool it uses while answering; map those names to
+  // integration rows (Redis/company-memory, Google Suite, DuckDuckGo) and light them.
+  delegate.onToolUse(({ tools }) => {
+    const targets = new Set(tools.flatMap(panelTargetsForTool));
+    for (const target of targets) {
+      broadcastPanelToNotes({ op: "highlight", target });
+    }
+  });
+
   // Retain the full meeting transcript so the end-of-meeting action-item subagent
   // has the whole conversation. Generous cap as a memory guard, not a feature limit.
   const meetingTranscript: MeetingUtterance[] = [];
@@ -141,6 +163,7 @@ export function startCtlServer(
     }
     const items = await delegate.extractActionItems({ meetingId, transcript });
     console.log(`[ctl] action-item subagent returned ${items.length} items`);
+    broadcastPanelToNotes({ op: "highlight", target: "tasks" });
     if (aguiBaseUrl) {
       await postActionItemsToAgui(aguiBaseUrl, items);
     } else {
@@ -161,6 +184,7 @@ export function startCtlServer(
     const task = await postAddActionItemToAgui(aguiBaseUrl, input);
     if (!task) return { status: "failed" };
     console.log(`[ctl] added action item: ${task.title}`);
+    broadcastPanelToNotes({ op: "highlight", target: "tasks" });
     return { status: "added", title: task.title };
   };
 
@@ -197,6 +221,7 @@ export function startCtlServer(
       return { status: "not_found" };
     }
     console.log(`[ctl] removed action item: ${removed.title}`);
+    broadcastPanelToNotes({ op: "highlight", target: "tasks" });
     return { status: "removed", title: removed.title };
   };
 
@@ -217,6 +242,7 @@ export function startCtlServer(
     },
     onUtterance: forwardUtterance,
     onChatMessage: forwardChatMessage,
+    onPanelSignal: broadcastPanelToNotes,
     onAudioStart(id, sampleRate) {
       sendMediaJson(sockets, {
         type: "speak_stream_start",

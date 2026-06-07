@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import type { TranscriptUtterance } from "@/lib/meetingNotes";
+import { logPollFailure, pollDelayMs } from "@/lib/meetingPoll";
 import { useMeetingNotes } from "@/components/MeetingNotesProvider";
 
 // Safety-net poll interval. The WebSocket below delivers utterances instantly; this
@@ -20,13 +21,17 @@ const WS_RETRY_MS = 3_000;
 // harmless and the panel never shows duplicates or misses a line.
 export function MeetingNotesWatcher() {
   const { addNote } = useMeetingNotes();
+  const addNoteRef = useRef(addNote);
+  addNoteRef.current = addNote;
 
   useEffect(() => {
     let stopped = false;
     let cursor = 0;
+    let pollFailures = 0;
     let pollTimer: ReturnType<typeof setTimeout> | undefined;
     let wsRetryTimer: ReturnType<typeof setTimeout> | undefined;
     let ws: WebSocket | undefined;
+    const pollAbort = new AbortController();
     const seen = new Set<string>();
 
     const keyOf = (u: TranscriptUtterance) => `${u.ts}|${u.speaker}|${u.text}`;
@@ -35,13 +40,14 @@ export function MeetingNotesWatcher() {
       const key = keyOf(u);
       if (seen.has(key)) return;
       seen.add(key);
-      addNote({ text: u.text, speaker: u.speaker });
+      addNoteRef.current({ text: u.text, speaker: u.speaker });
     };
 
     const poll = async () => {
       try {
         const response = await fetch(`/api/meeting/transcript?after=${cursor}`, {
           cache: "no-store",
+          signal: pollAbort.signal,
         });
         if (response.ok) {
           const data = (await response.json()) as {
@@ -50,11 +56,17 @@ export function MeetingNotesWatcher() {
           };
           for (const utterance of data.utterances) handle(utterance);
           if (typeof data.seq === "number") cursor = data.seq;
+          pollFailures = 0;
+        } else {
+          pollFailures += 1;
         }
       } catch (error) {
-        console.error("[agui] transcript poll failed", error);
+        pollFailures += 1;
+        logPollFailure("transcript", error, pollFailures);
       } finally {
-        if (!stopped) pollTimer = setTimeout(poll, POLL_MS);
+        if (!stopped) {
+          pollTimer = setTimeout(poll, pollDelayMs(POLL_MS, pollFailures));
+        }
       }
     };
 
@@ -111,6 +123,7 @@ export function MeetingNotesWatcher() {
 
     return () => {
       stopped = true;
+      pollAbort.abort();
       if (pollTimer) clearTimeout(pollTimer);
       if (wsRetryTimer) clearTimeout(wsRetryTimer);
       if (ws) {
@@ -118,7 +131,7 @@ export function MeetingNotesWatcher() {
         ws.close();
       }
     };
-  }, [addNote]);
+  }, []);
 
   return null;
 }
