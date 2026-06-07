@@ -392,6 +392,7 @@ export class OpenAIRealtimeVoice {
             name: "delegate_to_company_agent",
             description:
               "Ask Alfred's Talon-backed delegate for internal company facts from company docs, Slack/project/meeting context, colleague notes, ship-readiness blockers, or current public web lookup. " +
+              "For GitHub questions, Alfred's repository is ShukantPal/alfred; use that when the user says Alfred repo, this repo, our repo, or the repo without another explicit owner/name. " +
               "Do NOT use for quantitative data (finances, metrics, trends, breakdowns) — use render_visual instead. " +
               "Do NOT use when the user asks for a diagram, architecture, flow, or to show a colleague's words on screen — use render_visual instead.",
             parameters: {
@@ -1170,6 +1171,7 @@ When the user asks for a diagram, architecture, data flow, or how components con
 
 # Delegation
 Call delegate_to_company_agent for non-quantitative factual questions: colleague notes, ship readiness, blockers, project status, Slack context, policy/docs prose, or current public web lookup. Do not use delegate for finances, metrics, or other numeric data — use render_visual instead. For delegated questions, do not speak before the tool result is available. Call the tool at most once for a user question, then answer using that result. The delegation result is authoritative. If it says context is missing, say that plainly.
+For GitHub questions, Alfred's repository is ShukantPal/alfred. When the user says "Alfred repo", "this repo", "our repo", or "the repo" without another explicit owner/name, include owner ShukantPal and repo alfred in the delegated question.
 
 # Screenshare
 When the user asks Alfred to share the screen, show the screen, present, or start screenshare, call start_screenshare. Confirm briefly after the tool returns.
@@ -1198,6 +1200,7 @@ function responseInstructions(reason: string, addressedText?: string): string {
     "If it asks what someone said or to show their exact words on screen, call render_visual for a quote (not delegate_to_company_agent). " +
     "If the request asks for meeting notes or a meeting recap, call show_meeting_notes. " +
     "If it needs other internal company context or current public information, call delegate_to_company_agent. " +
+    "For GitHub questions, Alfred's repository is ShukantPal/alfred; include that owner/name when delegating ambiguous repo references. " +
     "Call the chosen tool silently and do not produce spoken content before the tool result. Otherwise answer concisely by voice.";
   const addressed = addressedText?.trim();
   if (addressed) {
