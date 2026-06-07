@@ -63,15 +63,31 @@ async function main() {
 
     agui?.stop();
     tunnel?.stop();
-    ctlServer?.stop();
+    await ctlServer?.stop();
   };
 
   const shutdown = async () => {
-    if (isShuttingDown) return;
+    if (isShuttingDown) {
+      console.warn("[demo] shutdown already in progress; waiting for Recall leave_call");
+      return;
+    }
     isShuttingDown = true;
+    const forceExit = setTimeout(() => {
+      console.warn("[demo] shutdown timed out; forcing exit");
+      process.exit(130);
+    }, config.shutdownTimeoutMs + 10_000);
+    forceExit.unref();
     console.log("\n[demo] shutting down");
-    await cleanup();
-    process.exit(0);
+    try {
+      await cleanup();
+      clearTimeout(forceExit);
+      process.exit(0);
+    } catch (error) {
+      clearTimeout(forceExit);
+      console.error("[demo] shutdown failed");
+      console.error(error);
+      process.exit(1);
+    }
   };
 
   process.on("SIGINT", shutdown);
@@ -80,7 +96,7 @@ async function main() {
   try {
     ctlServer = startCtlServer(config.ctlHost, config.ctlPort, {
       onStartScreenshare() {
-        void startScreenshare();
+        return startScreenshare();
       },
     });
     console.log(`[demo] ctl server listening at ${ctlServer.localBaseUrl}`);

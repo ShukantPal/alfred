@@ -8,7 +8,7 @@ and uses Recall.ai to send a bot into a meeting.
 Alfred is a Bun workspace monorepo:
 
 - `ctl/`: meeting control plane, Recall.ai integration, media pages, and OpenAI Realtime voice.
-- `agent/`: company memory and agent harness exposed over WebSocket.
+- `agent/`: Talon bootstrap/configuration for Alfred's company-memory delegate.
 
 Use the root `bun.lock` as the only lockfile. Do not run package-manager installs
 inside workspace packages.
@@ -55,13 +55,21 @@ bun run demo:stop-tunnels
 
 ## Agent
 
+The live meeting path no longer uses a bespoke WebSocket harness. OpenAI
+Realtime delegates company-context questions through ctl's
+`delegate_to_company_agent` tool, and that tool uses `agent/` to create or reuse
+a meeting-scoped Talon session. `agent/` attaches a built-in stdio
+company-memory MCP server to Talon by default, so the demo does not need a
+separate MCP port. `TALON_COMPANY_MCP_URL` or `REDIS_MCP_URL` can still override
+that with an external HTTP MCP endpoint.
+
 Run agent commands from the repo root:
 
 ```sh
-bun run agent:dev    # WebSocket server on ws://localhost:8787
-bun run agent:seed   # seed company context
-bun run agent:demo   # simulate ctl/ against the agent server
-bun run agent:test   # run agent tests
+bun run agent:dev    # start/configure a local Talon node
+bun run agent:demo   # one-shot Talon delegation demo
+bun run agent:test   # ask the Talon delegate directly from the agent layer
+bun run agent:check  # typecheck the Talon bootstrap package
 ```
 
 You can also run the workspace scripts directly:
@@ -92,7 +100,7 @@ bun run --cwd agent dev
 - `ALFRED_VOICE_PROVIDER`: only `openai-realtime` is supported.
 - `OPENAI_API_KEY`: enables OpenAI Realtime voice.
 - `OPENAI_REALTIME_MODEL`: OpenAI Realtime model, default `gpt-realtime-2`.
-- `OPENAI_REALTIME_VOICE`: OpenAI Realtime voice, default `marin`.
+- `OPENAI_REALTIME_VOICE`: OpenAI Realtime voice, default `cedar`.
 - `OPENAI_REALTIME_REASONING_EFFORT`: Realtime reasoning effort, default `low`.
 - `OPENAI_REALTIME_TRANSCRIPTION_MODEL`: Realtime input transcription model for wake-word gating, default `gpt-4o-transcribe`.
 - `ALFRED_WAKE_WORD`: word required before ctl triggers a Realtime model response, default `alfred`.
@@ -105,6 +113,24 @@ bun run --cwd agent dev
 - `OPENAI_REALTIME_INPUT_SAMPLE_RATE`: Recall raw audio sample rate, default `16000`.
 - `OPENAI_REALTIME_OUTPUT_SAMPLE_RATE`: PCM playback sample rate for Realtime output, default `24000`.
 - `OPENAI_REALTIME_INSTRUCTIONS`: override Alfred's realtime system instructions.
+- `WANDB_API_KEY`: required; enables Weave tracing for Alfred's Talon delegate ops and is used for W&B Inference when `LLM_PROVIDER=wandb`.
+- `WEAVE_PROJECT`: Weave project name, default `meeting-agent`.
+- `LLM_PROVIDER`: `openai` or `wandb` for the Talon delegate provider config, default `openai`.
+- `TALON_NAMESPACE`: Talon namespace for delegated company-memory sessions, default `alfred`.
+- `TALON_COMPANY_AGENT`: Talon agent name used by `delegate_to_company_agent`, default `company-memory`.
+- `TALON_PROVIDER_NAME`: provider key configured in Talon, default `openai`.
+- `TALON_PROVIDER_BASE_URL`: OpenAI-compatible provider base URL; defaults to OpenAI or W&B Inference based on `LLM_PROVIDER`.
+- `TALON_MODEL`: model used by the Talon delegate, default `gpt-4.1-mini` for OpenAI or `ibm-granite/granite-4.1-8b` for W&B Inference.
+- `TALON_DATA_DIR`: persistent Talon control-plane data directory, default `.tools/talon/data`.
+- `TALON_WORKSPACE_DIR`: Talon workspace directory, default `.tools/talon/workspace`.
+- `TALON_JWT_SECRET`: required JWT secret for the local Talon node.
+- `TALON_JWT_TTL_SECONDS`: TTL for freshly minted Talon request JWTs, default `86400`. ctl mints a new token for each Talon RPC.
+- `TALON_COMPANY_MCP_NAME`: MCP server name configured in Talon, default `company-memory`.
+- `TALON_COMPANY_MCP_URL`: optional HTTP MCP endpoint for Redis/company-memory tools. When unset, agent uses its built-in stdio MCP server. `REDIS_MCP_URL` is also accepted.
+- `TALON_MEMORY_MCP_COMMAND`: command for the built-in stdio MCP server, default is the current Bun executable.
+- `TALON_MEMORY_MCP_ARGS_JSON`: JSON string array of stdio MCP command args, default points at `agent/src/memory-mcp.ts`.
+- `TALON_COMPANY_MCP_HEADERS_JSON`: optional JSON object of headers for the company-memory MCP endpoint.
+- `TALON_DELEGATE_TIMEOUT_MS`: timeout for a Talon delegation call, default `20000`.
 
 ## Control Plane Endpoints
 
@@ -137,10 +163,12 @@ VAD enabled but disables automatic model responses; it only sends
 `ALFRED_WAKE_WORD` (`alfred` by default). The model's PCM output is sent to
 `/ws/media`, where the Output Media page plays it into the meeting.
 
-`agent/` is not the primary responder. ctl exposes it to the Realtime model as a
-`delegate_to_company_agent` function tool, so the voice model can ask the
-company-memory harness for seeded docs/Slack/project context and then speak the
-result itself.
+`agent/` is not the primary responder. ctl exposes `delegate_to_company_agent`
+to the Realtime model, and that function creates or reuses a meeting-scoped
+Talon session. Talon owns the delegated agent runtime. The delegate gets company
+memory from `agent/`'s built-in stdio MCP server by default; set
+`TALON_COMPANY_MCP_URL` only when replacing it with an external HTTP
+Redis/company-memory MCP server.
 
 If Alfred hears `start screenshare`, ctl calls Recall.ai's runtime Output Media
 endpoint for the active bot and starts `/media/screen` as a screenshare. The

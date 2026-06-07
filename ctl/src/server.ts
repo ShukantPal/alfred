@@ -1,5 +1,5 @@
 import type { Server, ServerWebSocket } from "bun";
-import { createAgentClient } from "./agent/client";
+import { createTalonCompanyDelegateFromEnv } from "@alfred/agent";
 import { extractRecallMixedAudio } from "./recall/audio";
 import { createOpenAIRealtimeVoiceFromEnv } from "./realtime/openai";
 import { createRouter } from "./routes";
@@ -7,12 +7,12 @@ import { createRouter } from "./routes";
 export interface CtlServer {
   localBaseUrl: string;
   port: number;
-  stop(): void;
+  stop(): Promise<void>;
   broadcast(message: unknown): void;
 }
 
 export interface CtlServerOptions {
-  onStartScreenshare?(): void;
+  onStartScreenshare?(): Promise<void> | void;
 }
 
 interface WebSocketData {
@@ -43,15 +43,15 @@ export function startCtlServer(
     }
     sendMediaJson(sockets, message);
   };
-  // Bridge to the agent/ harness for Realtime function-call subdelegation.
-  const agentUrl = process.env.ALFRED_AGENT_URL ?? "ws://127.0.0.1:8787";
+  // Bridge Realtime function-call subdelegation into Talon sessions.
   const meetingId = process.env.ALFRED_MEETING_ID ?? `ctl-${crypto.randomUUID().slice(0, 8)}`;
-  const agent = createAgentClient({ url: agentUrl, meetingId });
-  console.log(`[ctl] agent bridge -> ${agentUrl} (meeting ${meetingId})`);
+  const delegate = createTalonCompanyDelegateFromEnv(process.env);
+  console.log(`[ctl] Talon delegate configured (meeting ${meetingId})`);
 
   const speaker = { id: "meeting", displayName: "Participant" };
   const realtimeVoice = createOpenAIRealtimeVoiceFromEnv(process.env, {
-    agent,
+    delegate,
+    meetingId,
     speaker,
     onStatus(message) {
       sendMediaJson(sockets, { type: "status", message });
@@ -74,6 +74,9 @@ export function startCtlServer(
     },
     onAudioClear() {
       sendMediaJson(sockets, { type: "speak_stream_clear" });
+    },
+    onStartScreenshare() {
+      return options.onStartScreenshare?.();
     },
   });
   if (realtimeVoice.enabled) {
@@ -145,12 +148,12 @@ export function startCtlServer(
   return {
     localBaseUrl: `http://${hostname}:${server.port ?? port}`,
     port: server.port ?? port,
-    stop() {
+    async stop() {
       for (const socket of sockets) {
         socket.close();
       }
       realtimeVoice.close();
-      agent.close();
+      await delegate.close();
       server.stop(true);
     },
     broadcast,

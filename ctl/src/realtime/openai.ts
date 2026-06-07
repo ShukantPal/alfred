@@ -1,4 +1,4 @@
-import type { AgentClient, AgentSpeaker } from "../agent/client";
+import type { CompanyDelegate, CompanyDelegateRequest } from "@alfred/agent";
 
 export interface OpenAIRealtimeVoiceOptions {
   apiKey?: string;
@@ -17,13 +17,15 @@ export interface OpenAIRealtimeVoiceOptions {
   inputSampleRate: number;
   outputSampleRate: number;
   safetyIdentifier?: string;
-  speaker: AgentSpeaker;
-  agent: AgentClient;
+  meetingId: string;
+  speaker: CompanyDelegateRequest["speaker"];
+  delegate: CompanyDelegate;
   onStatus(message: string): void;
   onAudioStart(id: string, sampleRate: number): void;
   onAudio(bytes: Uint8Array): void;
   onAudioEnd(id: string): void;
   onAudioClear(): void;
+  onStartScreenshare(): Promise<void> | void;
 }
 
 type ConnectionState = "idle" | "connecting" | "open" | "ready" | "closed";
@@ -33,6 +35,8 @@ interface RealtimeEvent {
   delta?: string;
   response?: {
     id?: string;
+    status?: string;
+    status_details?: unknown;
     output?: RealtimeOutputItem[];
   };
   response_id?: string;
@@ -68,15 +72,18 @@ export class OpenAIRealtimeVoice {
   private readonly vadPrefixPaddingMs: number;
   private readonly semanticVadEagerness: OpenAIRealtimeVoiceOptions["semanticVadEagerness"];
   private readonly inputSampleRate: number;
+  private readonly realtimeInputSampleRate: number;
   private readonly outputSampleRate: number;
   private readonly safetyIdentifier?: string;
-  private readonly speaker: AgentSpeaker;
-  private readonly agent: AgentClient;
+  private readonly meetingId: string;
+  private readonly speaker: CompanyDelegateRequest["speaker"];
+  private readonly delegate: CompanyDelegate;
   private readonly onStatus: (message: string) => void;
   private readonly onAudioStart: (id: string, sampleRate: number) => void;
   private readonly onAudio: (bytes: Uint8Array) => void;
   private readonly onAudioEnd: (id: string) => void;
   private readonly onAudioClear: () => void;
+  private readonly onStartScreenshare: () => Promise<void> | void;
   private readonly queuedAudio: string[] = [];
   private socket?: WebSocket;
   private state: ConnectionState = "idle";
@@ -100,15 +107,18 @@ export class OpenAIRealtimeVoice {
     this.vadPrefixPaddingMs = options.vadPrefixPaddingMs;
     this.semanticVadEagerness = options.semanticVadEagerness;
     this.inputSampleRate = options.inputSampleRate;
+    this.realtimeInputSampleRate = Math.max(24_000, options.inputSampleRate);
     this.outputSampleRate = options.outputSampleRate;
     this.safetyIdentifier = options.safetyIdentifier;
+    this.meetingId = options.meetingId;
     this.speaker = options.speaker;
-    this.agent = options.agent;
+    this.delegate = options.delegate;
     this.onStatus = options.onStatus;
     this.onAudioStart = options.onAudioStart;
     this.onAudio = options.onAudio;
     this.onAudioEnd = options.onAudioEnd;
     this.onAudioClear = options.onAudioClear;
+    this.onStartScreenshare = options.onStartScreenshare;
   }
 
   get enabled(): boolean {
@@ -118,7 +128,11 @@ export class OpenAIRealtimeVoice {
   sendPcm(audio: Uint8Array): void {
     if (this.isClosed || !this.apiKey || audio.byteLength === 0) return;
     this.ensureConnected();
-    const encoded = Buffer.from(audio).toString("base64");
+    const realtimeAudio =
+      this.inputSampleRate === this.realtimeInputSampleRate
+        ? audio
+        : resamplePcm16(audio, this.inputSampleRate, this.realtimeInputSampleRate);
+    const encoded = Buffer.from(realtimeAudio).toString("base64");
     if (this.state !== "ready") {
       this.queuedAudio.push(encoded);
       if (this.queuedAudio.length > 250) this.queuedAudio.shift();
@@ -204,7 +218,7 @@ export class OpenAIRealtimeVoice {
           input: {
             format: {
               type: "audio/pcm",
-              rate: this.inputSampleRate,
+              rate: this.realtimeInputSampleRate,
             },
             ...(this.noiseReduction === "none"
               ? {}
@@ -222,6 +236,7 @@ export class OpenAIRealtimeVoice {
           output: {
             format: {
               type: "audio/pcm",
+              rate: this.outputSampleRate,
             },
             voice: this.voice,
           },
@@ -231,7 +246,7 @@ export class OpenAIRealtimeVoice {
             type: "function",
             name: "delegate_to_company_agent",
             description:
-              "Ask Alfred's company-memory subdelegation agent for factual answers from seeded company docs, Slack context, project memory, and meeting context.",
+              "Ask Alfred's Talon-backed company-memory delegate for factual answers from company docs, Slack context, project memory, and meeting context.",
             parameters: {
               type: "object",
               properties: {
@@ -242,6 +257,17 @@ export class OpenAIRealtimeVoice {
                 },
               },
               required: ["question"],
+              additionalProperties: false,
+            },
+          },
+          {
+            type: "function",
+            name: "start_screenshare",
+            description:
+              "Start Alfred's meeting screenshare output media when the user explicitly asks Alfred to share or show the screen.",
+            parameters: {
+              type: "object",
+              properties: {},
               additionalProperties: false,
             },
           },
@@ -259,7 +285,7 @@ export class OpenAIRealtimeVoice {
         prefix_padding_ms: this.vadPrefixPaddingMs,
         silence_duration_ms: this.vadSilenceDurationMs,
         create_response: false,
-        interrupt_response: true,
+        interrupt_response: false,
       };
     }
 
@@ -267,7 +293,7 @@ export class OpenAIRealtimeVoice {
       type: "semantic_vad",
       eagerness: this.semanticVadEagerness,
       create_response: false,
-      interrupt_response: true,
+      interrupt_response: false,
     };
   }
 
@@ -280,11 +306,20 @@ export class OpenAIRealtimeVoice {
         this.onStatus("realtime voice ready");
         this.flushQueuedAudio();
         return;
+      case "response.created":
+        console.log("[ctl] realtime response created");
+        return;
       case "conversation.item.input_audio_transcription.completed":
         this.handleInputTranscript(event.transcript ?? "");
         return;
       case "input_audio_buffer.speech_started":
+        console.log("[ctl] realtime speech started");
         this.clearPlaybackForInterruption();
+        return;
+      case "response.output_item.added":
+        if (event.item?.type) {
+          console.log(`[ctl] realtime response output item ${event.item.type}${event.item.name ? `:${event.item.name}` : ""}`);
+        }
         return;
       case "response.output_audio.delta":
       case "response.audio.delta":
@@ -300,6 +335,12 @@ export class OpenAIRealtimeVoice {
         }
         return;
       case "response.done":
+        console.log(
+          `[ctl] realtime response done status=${event.response?.status ?? "unknown"} outputs=${summarizeResponseOutput(event.response?.output ?? [])}`,
+        );
+        if (event.response?.status_details) {
+          console.log("[ctl] realtime response status details", event.response.status_details);
+        }
         this.endActiveAudio(event.response?.id);
         await this.handleFunctionCalls(event.response?.output ?? []);
         return;
@@ -322,7 +363,7 @@ export class OpenAIRealtimeVoice {
       return;
     }
 
-    this.send({ type: "response.create" });
+    this.createAudioResponse("wake word");
   }
 
   private flushQueuedAudio(): void {
@@ -369,35 +410,72 @@ export class OpenAIRealtimeVoice {
   private async handleFunctionCalls(items: RealtimeOutputItem[]): Promise<void> {
     let handledAny = false;
     for (const item of items) {
-      if (item.type !== "function_call" || item.name !== "delegate_to_company_agent") {
-        continue;
-      }
+      if (item.type !== "function_call") continue;
 
       const callId = item.call_id;
       if (!callId) continue;
 
-      const args = parseFunctionArgs(item.arguments);
-      const question = typeof args.question === "string" ? args.question.trim() : "";
-      const output = question
-        ? await askAgent(this.agent, question, this.speaker)
-        : "No question was provided for delegation.";
-
-      this.send({
-        type: "conversation.item.create",
-        item: {
-          type: "function_call_output",
-          call_id: callId,
-          output: JSON.stringify({
-            answer: output,
-          }),
-        },
-      });
+      const output = await this.handleFunctionCall(item);
+      this.sendFunctionOutput(callId, output);
       handledAny = true;
     }
 
     if (handledAny) {
-      this.send({ type: "response.create" });
+      this.createAudioResponse("function output");
     }
+  }
+
+  private async handleFunctionCall(item: RealtimeOutputItem): Promise<Record<string, unknown>> {
+    switch (item.name) {
+      case "delegate_to_company_agent": {
+        const args = parseFunctionArgs(item.arguments);
+        const question = typeof args.question === "string" ? args.question.trim() : "";
+        const answer = question
+          ? await this.delegate.ask({
+              meetingId: this.meetingId,
+              speaker: this.speaker,
+              question,
+            })
+          : "No question was provided for delegation.";
+        return { answer };
+      }
+      case "start_screenshare":
+        try {
+          await this.onStartScreenshare();
+          return { status: "started" };
+        } catch (error) {
+          return {
+            status: "failed",
+            error: error instanceof Error ? error.message : String(error),
+          };
+        }
+      default:
+        return {
+          status: "ignored",
+          error: `Unknown function call: ${item.name ?? "<missing>"}`,
+        };
+    }
+  }
+
+  private sendFunctionOutput(callId: string, output: Record<string, unknown>): void {
+    this.send({
+      type: "conversation.item.create",
+      item: {
+        type: "function_call_output",
+        call_id: callId,
+        output: JSON.stringify(output),
+      },
+    });
+  }
+
+  private createAudioResponse(reason: string): void {
+    console.log(`[ctl] realtime response.create reason=${reason}`);
+    this.send({
+      type: "response.create",
+      response: {
+        output_modalities: ["audio"],
+      },
+    });
   }
 
   private send(payload: unknown): void {
@@ -432,7 +510,7 @@ export function createOpenAIRealtimeVoiceFromEnv(
     ...options,
     apiKey: env.OPENAI_API_KEY,
     model: env.OPENAI_REALTIME_MODEL ?? "gpt-realtime-2",
-    voice: env.OPENAI_REALTIME_VOICE ?? "marin",
+    voice: env.OPENAI_REALTIME_VOICE ?? "cedar",
     instructions: env.OPENAI_REALTIME_INSTRUCTIONS ?? defaultInstructions(),
     reasoningEffort: env.OPENAI_REALTIME_REASONING_EFFORT ?? "low",
     transcriptionModel: env.OPENAI_REALTIME_TRANSCRIPTION_MODEL ?? "gpt-4o-transcribe",
@@ -449,39 +527,6 @@ export function createOpenAIRealtimeVoiceFromEnv(
   });
 }
 
-function askAgent(agent: AgentClient, question: string, speaker: AgentSpeaker): Promise<string> {
-  return new Promise(resolve => {
-    let answer = "";
-    let settled = false;
-    const timeout = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      resolve("The company-memory agent timed out before returning an answer.");
-    }, 20_000);
-
-    agent.ask(question, speaker, {
-      onDelta(delta) {
-        answer += delta;
-      },
-      onDone() {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timeout);
-        resolve(answer.trim() || "The company-memory agent returned no answer.");
-      },
-      onError(message) {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timeout);
-        resolve(`The company-memory agent failed: ${message}`);
-      },
-      onTrace(node, event, detail) {
-        console.log(`[ctl] delegation trace ${node}:${event}${detail ? ` - ${detail}` : ""}`);
-      },
-    });
-  });
-}
-
 function defaultInstructions(): string {
   return `You are Alfred, a meeting-native company agent. You listen in a live meeting and respond by voice.
 
@@ -490,6 +535,9 @@ Only speak when someone directly addresses Alfred or clearly asks the meeting bo
 
 # Company Memory Delegation
 For factual questions about company docs, Slack/project context, call delegate_to_company_agent before answering. The delegation result is authoritative. If it says context is missing, say that plainly.
+
+# Screenshare
+When the user asks Alfred to share the screen, show the screen, present, or start screenshare, call start_screenshare. Confirm briefly after the tool returns.
 
 # Voice Style
 Be concise, natural, and direct. Speak at a brisk conversational pace, not slowly. Answer in one sentence by default, two only when necessary. Do not add filler, throat-clearing, or long acknowledgements. If you need the delegation tool, use only a short preamble like "Let me check."
@@ -516,6 +564,36 @@ function parseFunctionArgs(args: string | undefined): Record<string, unknown> {
   } catch {
     return {};
   }
+}
+
+function summarizeResponseOutput(items: RealtimeOutputItem[]): string {
+  if (items.length === 0) return "none";
+  return items
+    .map(item => `${item.type ?? "unknown"}${item.name ? `:${item.name}` : ""}`)
+    .join(",");
+}
+
+function resamplePcm16(audio: Uint8Array, fromRate: number, toRate: number): Uint8Array {
+  if (fromRate <= 0 || toRate <= 0 || fromRate === toRate || audio.byteLength < 2) return audio;
+
+  const inputLength = Math.floor(audio.byteLength / 2);
+  const outputLength = Math.max(1, Math.round((inputLength * toRate) / fromRate));
+  const input = new DataView(audio.buffer, audio.byteOffset, inputLength * 2);
+  const output = new Uint8Array(outputLength * 2);
+  const outputView = new DataView(output.buffer);
+  const ratio = fromRate / toRate;
+
+  for (let index = 0; index < outputLength; index += 1) {
+    const sourceIndex = index * ratio;
+    const leftIndex = Math.floor(sourceIndex);
+    const rightIndex = Math.min(leftIndex + 1, inputLength - 1);
+    const fraction = sourceIndex - leftIndex;
+    const left = input.getInt16(leftIndex * 2, true);
+    const right = input.getInt16(rightIndex * 2, true);
+    outputView.setInt16(index * 2, Math.round(left + (right - left) * fraction), true);
+  }
+
+  return output;
 }
 
 function normalizeWakeWord(value: string): string {

@@ -12,13 +12,12 @@
     "check": "bun run check:ctl && bun run check:agent",
     "check:ctl": "bun run --cwd ctl check",
     "check:agent": "bun run --cwd agent check",
-    "demo": "bun run --cwd ctl demo",
+    "demo": "bun --cwd ctl src/demo.ts",
     "demo:stop-tunnels": "bun run --cwd ctl demo:stop-tunnels",
     "agent:dev": "bun run --cwd agent dev",
     "agent:start": "bun run --cwd agent start",
-    "agent:seed": "bun run --cwd agent seed",
     "agent:demo": "bun run --cwd agent demo",
-    "agent:smoke": "bun run --cwd agent smoke",
-    "agent:test": "bun run --cwd agent test"
+    "agent:test": "bun run --cwd agent test-agent",
+    "agent:check": "bun run --cwd agent check"
   }
 }
