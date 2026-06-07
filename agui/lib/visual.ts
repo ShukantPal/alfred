@@ -39,6 +39,7 @@ export interface VisualQuoteSpec {
   text: string;
   attribution: string;
   source?: string;
+  url?: string;
   title?: string;
 }
 
@@ -62,6 +63,7 @@ export const visualSpecSchema = z.object({
   text: z.string().optional(),
   attribution: z.string().optional(),
   source: z.string().optional(),
+  url: z.string().optional(),
 });
 
 export type VisualSpecParams = z.infer<typeof visualSpecSchema>;
@@ -94,6 +96,7 @@ export function toVisualSpec(params: VisualSpecParams): VisualSpec {
         text: params.text ?? "",
         attribution: params.attribution ?? "Unknown",
         source: params.source,
+        url: params.url,
       };
     case "text":
     default:

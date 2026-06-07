@@ -82,8 +82,10 @@ export interface VisualQuoteSpec {
   text: string;
   /** Who said or wrote it (e.g. a colleague's name). */
   attribution: string;
-  /** Optional source label (e.g. "Slack #eng-platform"). */
+  /** Optional source label (e.g. "GitHub · acme-corp/alfred"). */
   source?: string;
+  /** Optional link back to the source (e.g. a GitHub file URL from company memory). */
+  url?: string;
   /** Optional heading above the bubble. */
   title?: string;
 }

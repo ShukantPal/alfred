@@ -1250,7 +1250,7 @@ function visualBuildPrompt(question: string): string {
     '- "line": a trend over an ordered sequence (e.g. net income over quarters).',
     '- "table": multiple columns of values that do not chart cleanly.',
     '- "text": a short factual answer with no useful chart.',
-    '- "quote": a key passage from company memory (Slack, docs, notes) — how someone ' +
+    '- "quote": a key passage from company memory (GitHub, Slack, docs) — how someone ' +
       'implemented something, an explanation worth showing verbatim. Use when the request asks ' +
       'how a colleague did something or to show/pull up their words.',
     "",
@@ -1258,12 +1258,15 @@ function visualBuildPrompt(question: string): string {
     '{"kind":"pie"|"bar"|"line","title":string,"subtitle"?:string,"unit"?:string,"series":[{"label":string,"value":number}]}',
     '{"kind":"table","title":string,"subtitle"?:string,"columns":string[],"rows":(string|number)[][]}',
     '{"kind":"text","title"?:string,"text":string}',
-    '{"kind":"quote","title"?:string,"text":string,"attribution":string,"source"?:string}',
+    '{"kind":"quote","title"?:string,"text":string,"attribution":string,"source"?:string,"url"?:string}',
     "",
     "Rules: numeric values must be plain numbers (no commas, currency symbols, or units in the number).",
     'Put any currency/unit hint in "unit" (e.g. "$"). Keep the title short. Prefer 2-8 data points.',
     'For quote: "text" is the verbatim passage (1-4 sentences from tool results, not invented).',
-    '"attribution" is the colleague name; "source" is the doc/Slack title when available.',
+    '"attribution" is the colleague name (doc owner).',
+    '"source" labels the origin — e.g. "GitHub · acme-corp/alfred" for github docs, or the doc title.',
+    '"url" is the memory doc URL when available (required for GitHub sources).',
+    'For Shukant / CopilotKit / Recall questions, prefer doc id "shukant-notes" and quote a passage from it.',
   ].join("\n");
 }
 
@@ -1354,6 +1357,7 @@ function parseVisualSpec(answer: string): VisualSpec {
       text,
       attribution,
       source: optionalSpecString(record.source),
+      url: optionalSpecString(record.url),
     };
   }
 
