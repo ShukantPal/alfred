@@ -3,6 +3,8 @@
 import { useEffect } from "react";
 import { AlfredSidePanel } from "@/components/AlfredSidePanel";
 import { AppWorkspace } from "@/components/AppWorkspace";
+import { MeetingNotesProvider } from "@/components/MeetingNotesProvider";
+import { MeetingNotesWatcher } from "@/components/MeetingNotesWatcher";
 import { DEFAULT_APP_ID, documentTitleForApp, getAppTab } from "@/lib/apps";
 
 // Full-frame layout for the surface Alfred screenshares into the meeting.
@@ -15,13 +17,16 @@ export default function ScreensharePage() {
   }, [activeApp]);
 
   return (
-    <div className="screenshare-shell">
-      <div className="screenshare-body">
-        <AlfredSidePanel />
-        <div className="screenshare-main">
-          <AppWorkspace app={activeApp} />
+    <MeetingNotesProvider>
+      <MeetingNotesWatcher />
+      <div className="screenshare-shell">
+        <div className="screenshare-body">
+          <AlfredSidePanel />
+          <div className="screenshare-main">
+            <AppWorkspace app={activeApp} />
+          </div>
         </div>
       </div>
-    </div>
+    </MeetingNotesProvider>
   );
 }
