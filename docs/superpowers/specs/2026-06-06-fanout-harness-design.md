@@ -1,8 +1,8 @@
 # Fan-out Delegation Harness — Design Spec
 
 **Date:** 2026-06-06
-**Layer:** `agent/` (owns memory + harness)
-**Status:** Approved — building
+**Layer:** historical `agent/` harness
+**Status:** Superseded by Talon-backed Realtime delegation
 
 ## Goal
 
@@ -81,4 +81,4 @@ a single question pulls several docs → several parallel subagents. Add `url` t
 - Live Google Drive loader writing `ContextDoc`s into `Memory` (same interface).
 - Critic co-agent verifying groundedness before synthesis.
 - RediSearch KNN vector retrieval (swap `Memory.retrieve` internals).
-- Wire `ctl/ ↔ agent/` (the parked `ctl/src/agent/client.ts`).
+- Legacy `ctl/ ↔ agent/` wiring is superseded by Realtime tool calls into Talon-backed delegates.
