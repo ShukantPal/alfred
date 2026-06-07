@@ -2,7 +2,9 @@
 
 import { useEffect } from "react";
 import type { ChatEvent, ChatMessage } from "@/lib/chat";
+import type { PanelSignalEvent } from "@/lib/panel";
 import { useMeetingChat } from "@/components/ChatProvider";
+import { usePanelSignals } from "@/components/PanelSignalProvider";
 import { useVisualAgent } from "@/components/VisualAgentProvider";
 
 // Safety-net poll interval; the /ws/notes WebSocket delivers events instantly and
@@ -14,6 +16,7 @@ const WS_RETRY_MS = 3_000;
 export function ChatWatcher() {
   const { applyEvent } = useMeetingChat();
   const { ask } = useVisualAgent();
+  const { applySignal } = usePanelSignals();
 
   useEffect(() => {
     let stopped = false;
@@ -75,12 +78,15 @@ export function ChatWatcher() {
         try {
           const message = JSON.parse(event.data as string) as {
             type?: string;
-            event?: ChatEvent;
+            event?: ChatEvent | PanelSignalEvent;
             question?: string;
             afterTs?: number;
           };
           if (message.type === "chat" && message.event) {
-            applyEvent(message.event);
+            applyEvent(message.event as ChatEvent);
+          } else if (message.type === "panel" && message.event) {
+            // Live left-panel highlight: clear (new prompt) or light up a row.
+            applySignal(message.event as PanelSignalEvent);
           } else if (message.type === "agui_run" && typeof message.question === "string") {
             // Voice asked Alfred to visualize something: run the headless CopilotKit
             // agent programmatically (the participant never types). `afterTs` keeps
@@ -115,7 +121,7 @@ export function ChatWatcher() {
         ws.close();
       }
     };
-  }, [applyEvent, ask]);
+  }, [applyEvent, ask, applySignal]);
 
   return null;
 }

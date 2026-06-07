@@ -1,4 +1,5 @@
 import type { CompanyDelegate, CompanyDelegateRequest } from "@alfred/agent";
+import type { PanelSignalEvent } from "../panel";
 import type { MeetingUtterance } from "../transcript";
 
 export interface OpenAIRealtimeVoiceOptions {
@@ -30,6 +31,13 @@ export interface OpenAIRealtimeVoiceOptions {
    * when the spoken answer ends). Deterministic forwarding — not a weave.op.
    */
   onChatMessage?(event: ChatMessageEvent): void;
+  /**
+   * Live left-panel highlight signals for the screenshare surface. ctl emits a
+   * `clear` at the start of each addressed turn and `highlight` signals as Alfred
+   * touches Meeting Notes / Action Items / an integration, so the panel reflects
+   * what was used for the current prompt. Transient (ws-only) side-effect.
+   */
+  onPanelSignal?(event: PanelSignalEvent): void;
   onAudioStart(id: string, sampleRate: number): void;
   onAudio(bytes: Uint8Array): void;
   onAudioEnd(id: string): void;
@@ -129,6 +137,7 @@ export class OpenAIRealtimeVoice {
   private readonly onStatus: (message: string) => void;
   private readonly onUtterance?: (utterance: MeetingUtterance) => void;
   private readonly onChatMessage?: (event: ChatMessageEvent) => void;
+  private readonly onPanelSignal?: (event: PanelSignalEvent) => void;
   private readonly onAudioStart: (id: string, sampleRate: number) => void;
   private readonly onAudio: (bytes: Uint8Array) => void;
   private readonly onAudioEnd: (id: string) => void;
@@ -192,6 +201,7 @@ export class OpenAIRealtimeVoice {
     this.onStatus = options.onStatus;
     this.onUtterance = options.onUtterance;
     this.onChatMessage = options.onChatMessage;
+    this.onPanelSignal = options.onPanelSignal;
     this.onAudioStart = options.onAudioStart;
     this.onAudio = options.onAudio;
     this.onAudioEnd = options.onAudioEnd;
@@ -551,6 +561,10 @@ export class OpenAIRealtimeVoice {
     // delegate question.
     this.lastUserTranscript = transcript.trim();
 
+    // A new prompt to Alfred resets the live panel highlights; whatever Alfred
+    // touches during this turn re-lights the relevant rows.
+    this.onPanelSignal?.({ op: "clear" });
+
     this.createAudioResponse("wake word");
   }
 
@@ -761,6 +775,10 @@ export class OpenAIRealtimeVoice {
             status: "thinking",
           });
         }
+        // Alfred is drawing on meeting/company context and surfacing it in the
+        // chat (meeting-notes) window — light up the Meeting Notes row. Integration
+        // rows light up separately from the delegate's own tool usage.
+        if (question) this.onPanelSignal?.({ op: "highlight", target: "notes" });
         const answer = question ? await this.askDelegateOnce(question) : "No question was provided for delegation.";
         console.log(
           `[ctl] realtime delegate answer ${answer.length} chars: ${truncateForLog(answer, 320)}`,

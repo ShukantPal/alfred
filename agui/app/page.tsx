@@ -3,12 +3,15 @@
 import { CopilotSidebar } from "@copilotkit/react-core/v2";
 import { AlfredSidePanel } from "@/components/AlfredSidePanel";
 import { CopilotKitShell } from "@/components/CopilotKitShell";
+import { PanelSignalProvider } from "@/components/PanelSignalProvider";
 
 export default function Page() {
   return (
     <CopilotKitShell>
       <div className="app-shell">
-        <AlfredSidePanel />
+        <PanelSignalProvider>
+          <AlfredSidePanel />
+        </PanelSignalProvider>
 
         <main className="main-content">
           <h1>Alfred</h1>

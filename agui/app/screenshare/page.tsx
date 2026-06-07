@@ -7,6 +7,7 @@ import { AppWorkspace } from "@/components/AppWorkspace";
 import { ChatProvider } from "@/components/ChatProvider";
 import { ChatWatcher } from "@/components/ChatWatcher";
 import { MeetingNotesProvider } from "@/components/MeetingNotesProvider";
+import { PanelSignalProvider } from "@/components/PanelSignalProvider";
 import { MeetingNotesWatcher } from "@/components/MeetingNotesWatcher";
 import { VisualAgentProvider } from "@/components/VisualAgentProvider";
 import { VisualDevConsole } from "@/components/VisualDevConsole";
@@ -30,18 +31,20 @@ export default function ScreensharePage() {
       <MeetingNotesProvider>
         <MeetingNotesWatcher />
         <ChatProvider>
-          <VisualAgentProvider>
-            <ChatWatcher />
-            <div className="screenshare-shell">
-              <div className="screenshare-body">
-                <AlfredSidePanel />
-                <div className="screenshare-main">
-                  <AppWorkspace app={activeApp} />
+          <PanelSignalProvider>
+            <VisualAgentProvider>
+              <ChatWatcher />
+              <div className="screenshare-shell">
+                <div className="screenshare-body">
+                  <AlfredSidePanel />
+                  <div className="screenshare-main">
+                    <AppWorkspace app={activeApp} />
+                  </div>
                 </div>
               </div>
-            </div>
-            <VisualDevConsole />
-          </VisualAgentProvider>
+              <VisualDevConsole />
+            </VisualAgentProvider>
+          </PanelSignalProvider>
         </ChatProvider>
       </MeetingNotesProvider>
     </CopilotKit>

@@ -78,6 +78,11 @@ context. Redis remains the intended production memory layer via an external comp
   Talon-bridge agent over ctl's `/api/visual` HTTP endpoint, not from a ctl voice tool directly (see
   "Voice-driven generative UI" below). `VisualSpec` is the ctl/agent contract type (mirrored in
   `agui/lib/visual.ts`).
+- `CompanyDelegate.onToolUse(listener)` subscribes to MCP/tool usage during any delegated
+  operation (deduped per op, fires as each tool resolves) and returns an unsubscribe function. ctl
+  uses it to drive the live side-panel integration highlights (see "Side-panel highlight signals"
+  below). Purely observational — it never gates the answer. This is the only non-request/response
+  method on the contract.
 - `CompanyDelegate.close()` stops the local Talon node.
 
 KEY RULE: ctl decides when the voice model may respond. ctl performs wake-word/address detection
@@ -109,6 +114,26 @@ wrapped in `weave.op` (no new reasoning, no new voice tool). Mechanism:
 - agui buffers events in `agui/lib/chatHub.ts`, exposes them at `/api/meeting/chat`
   (`?after=<seq>` / `?full=1`), and renders via `ChatProvider` (derives `mode: "landing" | "chat"`),
   `ChatWatcher`, and `ChatMode`. Chat is in-memory only, like the transcript and tasks buffers.
+
+## Side-panel highlight signals (ctl -> agui `/ws/notes`, transient)
+The screenshare left panel (`agui/components/AlfredSidePanel.tsx`) is a compact index, not a live
+content dump: single lines for **Meeting Notes** and **Action Items**, then one row per supported
+integration (**Redis**/company-memory, **DuckDuckGo**, **Google Docs/Sheets/Slides/Drive**). One or
+more rows light up (bold + drop shadow) when Alfred touches them — multiple at once when a single
+answer spans several sources — and all rows reset on the next user prompt. This is a transient, ws-only side-effect (like `agui_run`) — there is no
+catch-up buffer because the highlight state is inherently live and reset every turn. It is NOT a
+`weave.op` (no new reasoning). Mechanism:
+- Vocabulary lives in `ctl/src/panel.ts` (`PanelTarget`, `PanelSignalEvent` = `{op:"clear"}` |
+  `{op:"highlight", target}`) and is mirrored in `agui/lib/panel.ts`.
+- ctl broadcasts `{ type:"panel", event }` over `/ws/notes` via `broadcastPanelToNotes`
+  (`ctl/src/server.ts`). Triggers: `onPanelSignal` on the Realtime client emits `clear` at the start
+  of each addressed turn and `highlight target:"notes"` on `delegate_to_company_agent`; the
+  action-item handlers emit `highlight target:"tasks"`; and `delegate.onToolUse` maps each MCP tool
+  name to integration rows via `panelTargetsForTool` and emits `highlight` for each.
+- agui consumes the frames in `ChatWatcher` (`type:"panel"`) and stores the lit set in
+  `PanelSignalProvider` (`usePanelSignals`), which `AlfredSidePanel` reads. `clear` empties the set.
+- The `MeetingNotesPanel` / `TasksPanel` components are intentionally retained (not deleted);
+  rendering their content in the chat window is a follow-up PR.
 
 ## Voice-driven generative UI (CopilotKit/AG-UI, headless)
 When a participant asks Alfred to show/visualize/chart company data, Alfred renders an

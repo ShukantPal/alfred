@@ -82,6 +82,19 @@ export interface VisualRequest {
   question: string;
 }
 
+/**
+ * Emitted as the delegate calls MCP/tool functions during a delegated operation.
+ * ctl maps the tool names to live side-panel integration highlights (Redis,
+ * Google Suite, DuckDuckGo). Purely observational — never gates the answer.
+ */
+export interface ToolUseEvent {
+  meetingId: string;
+  /** Raw tool/function names the delegate invoked (e.g. "company_memory_search"). */
+  tools: string[];
+}
+
+export type ToolUseListener = (event: ToolUseEvent) => void;
+
 export interface CompanyDelegate {
   ask(request: CompanyDelegateRequest): Promise<string>;
   /**
@@ -102,5 +115,12 @@ export interface CompanyDelegate {
    * (`alfred.talon.buildVisual`) so it shows in the delegation tree.
    */
   buildVisual(request: VisualRequest): Promise<VisualSpec>;
+  /**
+   * Subscribe to MCP/tool usage during delegated operations so the caller can
+   * surface which integrations (Redis/company-memory, Google Workspace,
+   * DuckDuckGo) Alfred actually used. Fires as tools resolve, deduped per
+   * operation. Returns an unsubscribe function.
+   */
+  onToolUse(listener: ToolUseListener): () => void;
   close(): void | Promise<void>;
 }
