@@ -9,6 +9,7 @@ export type PanelTarget =
   | "notes"
   | "tasks"
   | "redis"
+  | "slack"
   | "google"
   | "duckduckgo"
   | "docs"

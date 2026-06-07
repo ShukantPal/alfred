@@ -13,6 +13,7 @@ export type PanelTarget =
   | "notes"
   | "tasks"
   | "redis"
+  | "slack"
   | "google"
   | "duckduckgo"
   | "docs"
@@ -37,6 +38,9 @@ export function panelTargetsForTool(toolName: string): PanelTarget[] {
 
   if (name.includes("company_memory") || name.includes("memory")) {
     targets.add("redis");
+  }
+  if (name.includes("slack")) {
+    targets.add("slack");
   }
   if (
     name.includes("duckduckgo") ||

@@ -31,6 +31,7 @@ interface IntegrationRow {
 
 const integrationRows: IntegrationRow[] = [
   { id: "redis", label: "Redis" },
+  { id: "slack", label: "Slack" },
   { id: "duckduckgo", label: "DuckDuckGo" },
   { id: "docs", label: "Google Docs" },
   { id: "sheets", label: "Google Sheets" },

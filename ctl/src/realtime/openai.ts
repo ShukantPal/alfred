@@ -370,6 +370,7 @@ export class OpenAIRealtimeVoice {
               "PREFERRED for quantitative company data: finances, revenue, expenses, metrics, trends, " +
               "comparisons, breakdowns, quarterly/annual reports, and any question whose best answer is " +
               "numbers in a chart or table — even if the user does not say \"chart\" or \"graph\". " +
+              "Also use when they ask to check Slack for metrics, percentages, or numbers to chart. " +
               "Also use when they ask to show, pull up, display, visualize, or report data. " +
               "Use for architecture and integrations too — e.g. diagram how Shukant connected CopilotKit " +
               "and Recall (Mermaid flowchart), or pull up a colleague's exact words as a quote bubble. " +
@@ -1166,7 +1167,7 @@ Only speak when someone directly addresses Alfred or clearly asks the meeting bo
 Answer normal addressed questions directly when you can do so without private company context or current external lookup.
 
 # Visuals (prefer for numbers and on-screen quotes)
-When a question involves company metrics, finances, revenue, expenses, trends, comparisons, breakdowns, quarterly/annual figures, or any data best shown as a chart or table, call render_visual — even if the user only asks "what were…", "how did we do…", or "pull up the report" without saying "chart". Examples: quarterly finances, revenue by category, net income over time. Call ONLY render_visual for that request (not delegate_to_company_agent). Alfred picks the chart/table and it renders on the shared screen. After the tool returns you may give a brief spoken intro (one sentence); the chart carries the detail — do not read out every number.
+When a question involves company metrics, finances, revenue, expenses, trends, comparisons, breakdowns, quarterly/annual figures, or any data best shown as a chart or table, call render_visual — even if the user only asks "what were…", "how did we do…", or "pull up the report" without saying "chart". Examples: quarterly finances, revenue by category, net income over time. This includes Slack metrics: if they ask to check Slack for percentages or numbers, call render_visual (not delegate_to_company_agent) so Alfred reads Slack and charts the results. Call ONLY render_visual for that request. Alfred picks the chart/table and it renders on the shared screen. After the tool returns you may give a brief spoken intro (one sentence); the chart carries the detail — do not read out every number.
 When the user asks for a diagram, architecture, data flow, or how components connect (e.g. "diagram how Shukant wired CopilotKit and Recall"), call render_visual so Alfred renders a Mermaid diagram on screen — not delegate_to_company_agent. When they ask what someone said or to pull up exact words from docs/Slack, call render_visual for a quote bubble instead.
 
 # Delegation
@@ -1195,7 +1196,7 @@ function responseInstructions(reason: string, addressedText?: string): string {
   }
 
   const base =
-    "If the request is about company metrics, finances, trends, or numeric breakdowns, call render_visual (not delegate_to_company_agent). " +
+    "If the request is about company metrics, finances, trends, or numeric breakdowns — including Slack percentages or numbers to chart — call render_visual (not delegate_to_company_agent). " +
     "If it asks for a diagram, architecture, or data flow, call render_visual for a Mermaid diagram (not delegate_to_company_agent). " +
     "If it asks what someone said or to show their exact words on screen, call render_visual for a quote (not delegate_to_company_agent). " +
     "If the request asks for meeting notes or a meeting recap, call show_meeting_notes. " +

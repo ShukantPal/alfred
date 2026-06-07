@@ -8,7 +8,7 @@ import type { PanelTarget } from "@/lib/panel";
 /** Side-panel integration rows that get their own icon. */
 export type IntegrationId = Extract<
   PanelTarget,
-  "redis" | "google" | "duckduckgo" | "docs" | "sheets" | "slides" | "drive"
+  "redis" | "slack" | "google" | "duckduckgo" | "docs" | "sheets" | "slides" | "drive"
 >;
 
 const marks: Partial<Record<IntegrationId, ReactNode>> = {
@@ -68,6 +68,7 @@ interface IntegrationIconProps {
 export function IntegrationIcon({ integration }: IntegrationIconProps) {
   // Google apps reuse the existing app-tab icon set.
   if (
+    integration === "slack" ||
     integration === "docs" ||
     integration === "sheets" ||
     integration === "slides" ||

@@ -1358,13 +1358,26 @@ function parseActionItemMatch(
 }
 
 function visualBuildPrompt(question: string): string {
+  const retrieval = isSlackQuestion(question)
+    ? [
+        "This request asks for Slack workspace data. First, call an available Slack MCP tool",
+        "(slack_search_recent_messages, slack_read_channel, or slack_read_thread) before any",
+        "company-memory lookup. Extract percentages and numeric metrics from Slack message text.",
+        "Do not answer from company memory alone when Slack tools are available.",
+        "If Slack tools return insufficient context, return a text visual saying so plainly.",
+      ]
+    : [
+        "First, retrieve the relevant data from company memory using company_memory_search and",
+        "company_memory_get. Some documents include a structured \"Data (JSON)\" payload with exact",
+        "numbers — prefer those for charts.",
+      ];
+
   return [
     "A meeting participant asked Alfred to pull up / show / visualize some company data.",
     `Request: "${question}"`,
     "",
-    "First, retrieve the relevant data from company memory using company_memory_search and",
-    "company_memory_get. Some documents include a structured \"Data (JSON)\" payload with exact",
-    "numbers — prefer those for charts. Do not invent numbers — only use tool results.",
+    ...retrieval,
+    "Do not invent numbers — only use tool results.",
     "",
     "Then decide the single representation that best communicates the answer and output it as JSON.",
     "Choose the kind that fits the data:",

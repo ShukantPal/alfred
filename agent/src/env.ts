@@ -8,11 +8,12 @@ export function loadRepoEnv(): void {
   const agentDir = join(sourceDir, "..");
   const repoDir = join(agentDir, "..");
 
-  loadIfPresent(join(repoDir, ".env"));
-  loadIfPresent(join(agentDir, ".env"));
+  // Repo-root .env is canonical; override empty keys Bun may pre-load from agent/.env.
+  loadIfPresent(join(repoDir, ".env"), true);
+  loadIfPresent(join(agentDir, ".env"), false);
 }
 
-function loadIfPresent(path: string): void {
+function loadIfPresent(path: string, override = false): void {
   if (!existsSync(path)) return;
-  loadDotEnv({ path, override: false, quiet: true });
+  loadDotEnv({ path, override, quiet: true });
 }
