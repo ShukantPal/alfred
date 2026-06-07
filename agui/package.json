@@ -12,6 +12,7 @@
   "dependencies": {
     "@copilotkit/react-core": "^1.59.5",
     "@copilotkit/runtime": "^1.59.5",
+    "mermaid": "^11.15.0",
     "next": "^16.2.7",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

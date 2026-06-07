@@ -789,6 +789,18 @@ body {
   height: 260px;
 }
 
+.chat-visual__mermaid {
+  overflow-x: auto;
+  padding: 4px 0;
+}
+
+.chat-visual__mermaid svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+}
+
 .recharts-text {
   font-family: inherit;
 }

@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useId, useRef } from "react";
 import {
   Bar,
   BarChart,
@@ -17,6 +18,7 @@ import {
 } from "recharts";
 import type {
   VisualChartSpec,
+  VisualMermaidSpec,
   VisualQuoteSpec,
   VisualSpec,
   VisualTableSpec,
@@ -53,6 +55,8 @@ function renderSpec(spec: VisualSpec) {
       return <TableVisual spec={spec} />;
     case "quote":
       return <QuoteVisual spec={spec} />;
+    case "mermaid":
+      return <MermaidVisual spec={spec} />;
     case "text":
     default:
       return <TextVisual spec={spec} />;
@@ -166,6 +170,50 @@ function TextVisual({ spec }: { spec: VisualTextSpec }) {
     <>
       <VisualHeader title={spec.title} />
       <p className="chat-visual__text">{spec.text}</p>
+    </>
+  );
+}
+
+function MermaidVisual({ spec }: { spec: VisualMermaidSpec }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const renderId = useId().replace(/:/g, "");
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || !spec.diagram.trim()) return;
+
+    let cancelled = false;
+    container.replaceChildren();
+
+    void (async () => {
+      try {
+        const mermaid = (await import("mermaid")).default;
+        mermaid.initialize({
+          startOnLoad: false,
+          theme: "neutral",
+          securityLevel: "loose",
+          fontFamily: "inherit",
+        });
+        if (cancelled) return;
+        const { svg } = await mermaid.render(`alfred-mermaid-${renderId}`, spec.diagram.trim());
+        if (cancelled || !containerRef.current) return;
+        containerRef.current.innerHTML = svg;
+      } catch {
+        if (!cancelled && containerRef.current) {
+          containerRef.current.textContent = "Could not render this diagram.";
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [renderId, spec.diagram]);
+
+  return (
+    <>
+      <VisualHeader title={spec.title} subtitle={spec.subtitle} />
+      <div className="chat-visual__mermaid" ref={containerRef} />
     </>
   );
 }

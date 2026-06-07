@@ -78,7 +78,7 @@ context. Redis remains the intended production memory layer via an external comp
   `alfred.talon.buildVisual`) that retrieves the relevant company data via the general memory tools
   (`company_memory_search` / `company_memory_get`, which surface any doc's structured `data` payload)
   and **chooses the representation**, returning a `VisualSpec`
-  (discriminated union: `pie | bar | line | table | text | quote`). It is invoked from agui's CopilotKit
+  (discriminated union: `pie | bar | line | table | text | quote | mermaid`). It is invoked from agui's CopilotKit
   Talon-bridge agent over ctl's `/api/visual` HTTP endpoint, not from a ctl voice tool directly (see
   "Voice-driven generative UI" below). `VisualSpec` is the ctl/agent contract type (mirrored in
   `agui/lib/visual.ts`).

@@ -10,7 +10,7 @@ export function VisualDevConsole() {
   const { ask } = useVisualAgent();
   const [enabled, setEnabled] = useState(false);
   const [value, setValue] = useState(
-    "How did Shukant implement the connection between CopilotKit and Recall?",
+    "Diagram how Shukant connected CopilotKit and Recall",
   );
 
   useEffect(() => {

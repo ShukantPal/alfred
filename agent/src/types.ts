@@ -42,7 +42,7 @@ export interface ActionItemMatchRequest {
 }
 
 /** The visual representations Alfred can choose from when answering with UI. */
-export type VisualKind = "pie" | "bar" | "line" | "table" | "text" | "quote";
+export type VisualKind = "pie" | "bar" | "line" | "table" | "text" | "quote" | "mermaid";
 
 /** A single labelled datapoint shared by pie/bar/line charts. */
 export interface VisualPoint {
@@ -90,12 +90,26 @@ export interface VisualQuoteSpec {
   title?: string;
 }
 
+/** A Mermaid diagram for architecture, data flow, or sequence explanations. */
+export interface VisualMermaidSpec {
+  kind: "mermaid";
+  title: string;
+  subtitle?: string;
+  /** Mermaid diagram source (flowchart, sequenceDiagram, etc.). */
+  diagram: string;
+}
+
 /**
  * A self-describing UI spec produced by Alfred. The `kind` field is the
  * discriminant CopilotKit's renderer switches on; Alfred decides which kind
  * best represents the answer.
  */
-export type VisualSpec = VisualChartSpec | VisualTableSpec | VisualTextSpec | VisualQuoteSpec;
+export type VisualSpec =
+  | VisualChartSpec
+  | VisualTableSpec
+  | VisualTextSpec
+  | VisualQuoteSpec
+  | VisualMermaidSpec;
 
 export interface VisualRequest {
   meetingId: string;
