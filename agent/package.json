@@ -20,7 +20,8 @@
     "demo": "bun src/demo-client.ts",
     "test-agent": "bun src/test-agent.ts",
     "memory-mcp": "bun src/memory-mcp.ts",
-    "slack-mcp": "bun src/slack-mcp.ts"
+    "slack-mcp": "bun src/slack-mcp.ts",
+    "github-mcp": "bun src/github-mcp.ts"
   },
   "dependencies": {
     "@connectrpc/connect": "^1.7.0",

@@ -11,9 +11,8 @@ memory is attached by default through a local stdio MCP server in `agent/`, so n
 port is needed. `TALON_COMPANY_MCP_URL` or `REDIS_MCP_URL` can still override it
 with an external HTTP MCP endpoint. Google Workspace can also be attached through
 `workspace-mcp` over stdio, but agent only registers it when Google OAuth
-credentials are present and the configured command is executable. Slack
-auto-attaches when auth is present, and GitHub is available as an opt-in remote
-HTTP MCP for real workspace/repo context.
+credentials are present and the configured command is executable. Slack and
+GitHub auto-attach when auth is present for real workspace/repo context.
 
 **For AI coding tools and full system context, read [AGENTS.md](../AGENTS.md).**
 
@@ -75,12 +74,14 @@ bun run agent:test -- --interactive
 - `TALON_SLACK_BOT_MCP_COMMAND`: command for Alfred's local Slack bot MCP, default is the current Bun executable.
 - `TALON_SLACK_BOT_MCP_ARGS_JSON`: JSON string array of local Slack bot MCP command args, default points at `agent/src/slack-mcp.ts`.
 - `TALON_SLACK_MCP_HEADERS_JSON`: optional JSON object of Slack MCP headers.
-- `TALON_GITHUB_MCP_ENABLED`: enable official remote GitHub MCP auto-attach, default `false`.
+- `TALON_GITHUB_MCP_ENABLED`: optional GitHub MCP override. GitHub auto-attaches when auth is present; set `false`, `0`, or `off` to force-disable it.
 - `TALON_GITHUB_MCP_NAME`: GitHub MCP server name in Talon, default `github`.
-- `TALON_GITHUB_MCP_URL`: GitHub remote MCP endpoint, default `https://api.githubcopilot.com/mcp/`.
+- `TALON_GITHUB_MCP_URL`: optional GitHub remote MCP endpoint. When unset, Alfred uses the local read-only GitHub MCP in `agent/src/github-mcp.ts`.
 - `TALON_GITHUB_MCP_AUTH_TOKEN`: bearer token for GitHub MCP. Falls back to `GITHUB_PERSONAL_ACCESS_TOKEN` or `GITHUB_PAT`.
+- `TALON_GITHUB_LOCAL_MCP_COMMAND`: command for Alfred's local GitHub MCP, default is the current Bun executable.
+- `TALON_GITHUB_LOCAL_MCP_ARGS_JSON`: JSON string array of local GitHub MCP command args, default points at `agent/src/github-mcp.ts`.
 - `TALON_GITHUB_MCP_READ_ONLY`: add the GitHub MCP read-only header, default `true`.
-- `TALON_GITHUB_MCP_TOOLSETS`: optional comma-separated GitHub MCP toolsets, for example `issues,pull_requests,repos`.
+- `TALON_GITHUB_MCP_TOOLSETS`: optional comma-separated GitHub MCP toolsets, default `issues,pull_requests,repos`.
 - `TALON_GITHUB_MCP_TOOLS`: optional comma-separated GitHub MCP tools.
 - `TALON_GITHUB_MCP_EXCLUDE_TOOLS`: optional comma-separated GitHub MCP tools to exclude.
 - `TALON_GITHUB_MCP_HEADERS_JSON`: optional JSON object of GitHub MCP headers.
@@ -225,18 +226,19 @@ present and that `TALON_SLACK_MCP_ENABLED` is not set to `false`, `0`, or `off`.
 
 ### GitHub MCP
 
-GitHub MCP is also opt-in and defaults to read-only mode:
+GitHub MCP auto-attaches when a token is present. By default Alfred uses a local
+read-only stdio MCP in `agent/src/github-mcp.ts`, because it is deterministic
+with a normal GitHub PAT:
 
 ```bash
-TALON_GITHUB_MCP_ENABLED=true
 TALON_GITHUB_MCP_AUTH_TOKEN=...
-TALON_GITHUB_MCP_TOOLSETS=issues,pull_requests,repos
 ```
 
 The default endpoint is GitHub's hosted MCP server at
-`https://api.githubcopilot.com/mcp/`. `TALON_GITHUB_MCP_READ_ONLY=true` adds
-`X-MCP-Readonly: true`, which disables write tools even when broader toolsets are
-requested.
+`https://api.githubcopilot.com/mcp/` when `TALON_GITHUB_MCP_URL` is set. For
+hosted/remote GitHub MCP, `TALON_GITHUB_MCP_READ_ONLY=true` adds
+`X-MCP-Readonly: true`, and `TALON_GITHUB_MCP_TOOLSETS` defaults to
+`issues,pull_requests,repos`.
 
 Create a token with the minimum access needed for the repositories in the demo.
 For fine-grained tokens, grant repository access only to the demo repo(s), then
@@ -267,6 +269,12 @@ TALON_GITHUB_MCP_TOOLSETS=issues,pull_requests,repos
 TALON_GITHUB_MCP_EXCLUDE_TOOLS=create_issue,create_pull_request,merge_pull_request
 ```
 
+To force-disable GitHub even when auth is present:
+
+```bash
+TALON_GITHUB_MCP_ENABLED=false
+```
+
 If you need to pass headers directly, use JSON:
 
 ```bash
@@ -282,7 +290,7 @@ bun run agent:dev
 Look for:
 
 ```text
-[agent] MCP github http -> https://api.githubcopilot.com/mcp/
+[agent] MCP github stdio -> /path/to/bun /path/to/agent/src/github-mcp.ts
 ```
 
 Then test a repo-specific question:

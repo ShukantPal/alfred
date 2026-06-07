@@ -4,6 +4,7 @@ import { events, gateway, gatewayConnect, manifests, models } from "@impalasys/t
 import { accessSync, constants, existsSync } from "node:fs";
 import { delimiter, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import net from "node:net";
 import * as weave from "weave";
 import {
   authorizationHeader,
@@ -31,8 +32,10 @@ const OPENAI_BASE_URL = "https://api.openai.com/v1";
 const WANDB_INFERENCE_BASE_URL = "https://api.inference.wandb.ai/v1";
 const SLACK_MCP_URL = "https://mcp.slack.com/mcp";
 const GITHUB_MCP_URL = "https://api.githubcopilot.com/mcp/";
+const DEFAULT_GITHUB_MCP_TOOLSETS = "issues,pull_requests,repos";
 const DEFAULT_MEMORY_MCP_SCRIPT = fileURLToPath(new URL("./memory-mcp.ts", import.meta.url));
 const DEFAULT_SLACK_MCP_SCRIPT = fileURLToPath(new URL("./slack-mcp.ts", import.meta.url));
+const DEFAULT_GITHUB_MCP_SCRIPT = fileURLToPath(new URL("./github-mcp.ts", import.meta.url));
 const REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const DEFAULT_GOOGLE_CLIENT_SECRET_PATH = fileURLToPath(
   new URL("../../client_secret.json", import.meta.url),
@@ -153,6 +156,17 @@ export class TalonCompanyDelegate implements CompanyDelegate {
   }
 
   private async askRuntime(request: CompanyDelegateRequest): Promise<string> {
+    try {
+      return await this.askRuntimeOnce(request);
+    } catch (error) {
+      if (!isRuntimeUnavailable(error)) throw error;
+      console.warn("[agent] Talon runtime unavailable during ask; restarting and retrying once");
+      await this.resetRuntimeAfterFailure();
+      return this.askRuntimeOnce(request);
+    }
+  }
+
+  private async askRuntimeOnce(request: CompanyDelegateRequest): Promise<string> {
     const runtime = await this.ensureRuntime();
     const channel = await this.channelForMeeting(runtime, request);
     const question = routedDelegateQuestion(request.question);
@@ -532,6 +546,20 @@ export class TalonCompanyDelegate implements CompanyDelegate {
     return this.initPromise;
   }
 
+  private async resetRuntimeAfterFailure(): Promise<void> {
+    const runtime = await this.initPromise?.catch(() => undefined);
+    this.initPromise = undefined;
+    this.channelsByMeeting.clear();
+    if (!runtime) return;
+    const logs = runtime.server.logs.trim();
+    if (logs) {
+      console.warn(`[agent] previous Talon runtime logs before restart:\n${logs}`);
+    }
+    await runtime.server.stop().catch(error => {
+      console.warn("[agent] failed to stop unavailable Talon runtime", error);
+    });
+  }
+
   private ensureWeave(): Promise<boolean> {
     this.weaveInitPromise ??= initWeave(this.options.weaveProject);
     return this.weaveInitPromise;
@@ -547,12 +575,19 @@ export class TalonCompanyDelegate implements CompanyDelegate {
       throw new Error("Talon delegation requires OPENAI_API_KEY or WANDB_API_KEY.");
     }
 
+    const ports = await selectTalonPorts(this.options.grpcPort, this.options.uiPort);
+    if (ports.grpcPort !== this.options.grpcPort || ports.uiPort !== this.options.uiPort) {
+      console.warn(
+        `[agent] Talon preferred ports ${this.options.grpcPort}/${this.options.uiPort} unavailable; using ${ports.grpcPort}/${ports.uiPort}`,
+      );
+    }
+
     console.log(`[agent] starting Talon delegate agent=${this.options.agentName}`);
     const server = await startTalon({
       jwtSecret: this.options.jwtSecret,
       config: talonConfig(this.options),
-      grpcPort: this.options.grpcPort,
-      uiPort: this.options.uiPort,
+      grpcPort: ports.grpcPort,
+      uiPort: ports.uiPort,
     });
 
     const transport = createGrpcTransport({
@@ -829,6 +864,47 @@ function talonConfig(options: TalonCompanyDelegateOptions): TalonConfig {
   };
 }
 
+async function selectTalonPorts(
+  preferredGrpcPort: number,
+  preferredUiPort: number,
+): Promise<{ grpcPort: number; uiPort: number }> {
+  if (
+    await isTcpPortAvailable(preferredGrpcPort) &&
+    await isTcpPortAvailable(preferredUiPort)
+  ) {
+    return { grpcPort: preferredGrpcPort, uiPort: preferredUiPort };
+  }
+
+  const start = Math.max(53_000, Math.min(preferredGrpcPort, preferredUiPort));
+  for (let grpcPort = start; grpcPort <= 53_998; grpcPort += 2) {
+    const uiPort = grpcPort + 1;
+    if (grpcPort === preferredGrpcPort || uiPort === preferredUiPort) continue;
+    if (await isTcpPortAvailable(grpcPort) && await isTcpPortAvailable(uiPort)) {
+      return { grpcPort, uiPort };
+    }
+  }
+
+  for (let grpcPort = 53_000; grpcPort <= 53_998; grpcPort += 2) {
+    const uiPort = grpcPort + 1;
+    if (await isTcpPortAvailable(grpcPort) && await isTcpPortAvailable(uiPort)) {
+      return { grpcPort, uiPort };
+    }
+  }
+
+  throw new Error("No free Talon port pair found in the 53xxx range.");
+}
+
+function isTcpPortAvailable(port: number): Promise<boolean> {
+  return new Promise(resolveAvailable => {
+    const server = net.createServer();
+    server.unref();
+    server.once("error", () => resolveAvailable(false));
+    server.listen(port, "127.0.0.1", () => {
+      server.close(() => resolveAvailable(true));
+    });
+  });
+}
+
 async function replaceMcpServer(
   runtime: TalonRuntime,
   server: TalonMcpServerOptions,
@@ -881,6 +957,14 @@ function isAlreadyExists(error: unknown): boolean {
   return error instanceof ConnectError
     ? error.code === Code.AlreadyExists
     : String(error).toLowerCase().includes("already exists");
+}
+
+function isRuntimeUnavailable(error: unknown): boolean {
+  if (error instanceof ConnectError) {
+    return error.code === Code.Unavailable;
+  }
+  const message = String(error).toLowerCase();
+  return message.includes("econnrefused") || message.includes("[unavailable]");
 }
 
 async function withTimeout<T>(
@@ -1083,6 +1167,7 @@ Tool routing:
 - Use Google Workspace only for read-only retrieval from the user's real Drive, Docs, Gmail, or Calendar. Before calling a Google Workspace tool that needs a document/file id, get that id from a prior Google Workspace search/list/get result or from an explicit user-provided URL/id.
 - Use Slack only for real workspace Slack retrieval when the question asks for Slack messages, channels, users, threads, files, or decisions discussed in Slack. Prefer read/search tools. Do not send messages, create channels, add reactions, or modify canvases.
 - Use GitHub only for repository, issue, pull request, Actions, code, or security-advisory context. Prefer read-only repository/issue/PR retrieval. Do not create issues, branches, pull requests, comments, reviews, commits, or trigger workflows.
+- The Alfred repository is ShukantPal/alfred. When a GitHub question says "Alfred", "this repo", "the repo", or "our repo" without another explicit owner/name, use owner ShukantPal and repo alfred.
 - Use DuckDuckGo only for public web questions or current external facts. Do not use web search to answer private company-memory questions unless the user asks for public context.
 - For public questions involving latest, current, today, this week, news, markets, market close, stocks, or other time-sensitive facts, use DuckDuckGo before answering. Do not answer those from model memory.
 
@@ -1429,6 +1514,22 @@ function optionalSpecString(value: unknown): string | undefined {
 }
 
 function routedDelegateQuestion(question: string): string {
+  if (isSlackQuestion(question)) {
+    return [
+      "This is a Slack workspace question.",
+      "You must call an available Slack MCP tool before answering. Use slack_auth_test for access checks, slack_search_recent_messages for message search, slack_read_channel/slack_read_thread for channel or thread reads, and slack_find_users for people lookup.",
+      "Do not answer from model memory. If Slack tools are unavailable or return insufficient context, say that plainly.",
+      `Question: ${question}`,
+    ].join("\n");
+  }
+  if (isGithubQuestion(question)) {
+    return [
+      "This is a GitHub repository question.",
+      "You must call an available GitHub MCP tool before answering. Use github_get_repository, github_get_file_contents, github_list_issues, github_list_pull_requests, github_get_issue, github_get_pull_request, or github_list_commits as appropriate.",
+      "Do not answer from company-memory or model memory. If GitHub tools are unavailable or return insufficient context, say that plainly.",
+      `Question: ${question}`,
+    ].join("\n");
+  }
   if (!isCurrentPublicQuestion(question)) return question;
   const today = new Date().toISOString().slice(0, 10);
   return [
@@ -1452,6 +1553,18 @@ function isCurrentPublicQuestion(question: string): boolean {
       normalized,
     );
   return hasFreshness && hasPublicTopic;
+}
+
+function isSlackQuestion(question: string): boolean {
+  const normalized = question.toLowerCase();
+  return /\b(slack|channel|thread|workspace)\b/.test(normalized);
+}
+
+function isGithubQuestion(question: string): boolean {
+  const normalized = question.toLowerCase();
+  return /\b(github|repo|repository|pull request|pr\b|issue|commit|branch|workflow|github actions)\b/.test(
+    normalized,
+  );
 }
 
 function buildWorkspaceMcpServer(
@@ -1595,9 +1708,6 @@ function buildSlackMcpServer(
 function buildGithubMcpServer(
   env: Record<string, string | undefined>,
 ): TalonMcpServerOptions | undefined {
-  const enabled = readBoolean(env.TALON_GITHUB_MCP_ENABLED, false);
-  if (!enabled) return undefined;
-
   const headers = readJsonObject(env.TALON_GITHUB_MCP_HEADERS_JSON);
   const authToken =
     env.TALON_GITHUB_MCP_AUTH_TOKEN?.trim() ||
@@ -1606,18 +1716,31 @@ function buildGithubMcpServer(
   if (authToken && !headers.Authorization) {
     headers.Authorization = `Bearer ${authToken}`;
   }
+  if (!readBoolean(env.TALON_GITHUB_MCP_ENABLED, true)) return undefined;
   if (!headers.Authorization) {
-    console.warn(
-      "[agent] skipping GitHub MCP: set TALON_GITHUB_MCP_AUTH_TOKEN, GITHUB_PERSONAL_ACCESS_TOKEN, GITHUB_PAT, or TALON_GITHUB_MCP_HEADERS_JSON",
-    );
+    if (env.TALON_GITHUB_MCP_ENABLED !== undefined) {
+      console.warn(
+        "[agent] skipping GitHub MCP: set TALON_GITHUB_MCP_AUTH_TOKEN, GITHUB_PERSONAL_ACCESS_TOKEN, GITHUB_PAT, or TALON_GITHUB_MCP_HEADERS_JSON",
+      );
+    }
     return undefined;
   }
 
   if (readBoolean(env.TALON_GITHUB_MCP_READ_ONLY, true) && !headers["X-MCP-Readonly"]) {
     headers["X-MCP-Readonly"] = "true";
   }
-  if (env.TALON_GITHUB_MCP_TOOLSETS?.trim() && !headers["X-MCP-Toolsets"]) {
-    headers["X-MCP-Toolsets"] = env.TALON_GITHUB_MCP_TOOLSETS.trim();
+  if (!headers["X-MCP-Toolsets"]) {
+    headers["X-MCP-Toolsets"] =
+      env.TALON_GITHUB_MCP_TOOLSETS?.trim() || DEFAULT_GITHUB_MCP_TOOLSETS;
+  }
+  if (!env.TALON_GITHUB_MCP_URL) {
+    return {
+      name: env.TALON_GITHUB_MCP_NAME ?? "github",
+      transport: "stdio",
+      target: env.TALON_GITHUB_LOCAL_MCP_COMMAND ?? process.execPath,
+      args: readStringArray(env.TALON_GITHUB_LOCAL_MCP_ARGS_JSON, [DEFAULT_GITHUB_MCP_SCRIPT]),
+      headers: {},
+    };
   }
   if (env.TALON_GITHUB_MCP_TOOLS?.trim() && !headers["X-MCP-Tools"]) {
     headers["X-MCP-Tools"] = env.TALON_GITHUB_MCP_TOOLS.trim();
