@@ -116,6 +116,57 @@ export function startCtlServer(
     return { count: items.length };
   };
 
+  // Voice-driven single-item edits to the action list shown on the screenshare.
+  const addActionItem = async (input: {
+    title: string;
+    assignee?: string;
+  }): Promise<{ status: string; title?: string }> => {
+    if (!aguiBaseUrl) {
+      console.warn("[ctl] add_action_item called but agui URL is not configured");
+      return { status: "unavailable" };
+    }
+    const task = await postAddActionItemToAgui(aguiBaseUrl, input);
+    if (!task) return { status: "failed" };
+    console.log(`[ctl] added action item: ${task.title}`);
+    return { status: "added", title: task.title };
+  };
+
+  const removeActionItem = async (input: {
+    title: string;
+  }): Promise<{ status: string; title?: string }> => {
+    if (!aguiBaseUrl) {
+      console.warn("[ctl] remove_action_item called but agui URL is not configured");
+      return { status: "unavailable" };
+    }
+    const items = await fetchActionItemsFromAgui(aguiBaseUrl);
+    if (items.length === 0) {
+      console.log("[ctl] remove_action_item called but the action-items list is empty");
+      return { status: "not_found" };
+    }
+    // Delegated match: a Weave-instrumented Talon subagent resolves which item the
+    // spoken description refers to (handles paraphrase/synonyms), then we remove by id.
+    const matchedId = await delegate.matchActionItemForRemoval({
+      meetingId,
+      query: input.title,
+      items: items.map(item => ({
+        id: item.id,
+        title: item.title,
+        assignee: item.assignee,
+      })),
+    });
+    if (!matchedId) {
+      console.log(`[ctl] delegate found no action item matching "${input.title}"`);
+      return { status: "not_found" };
+    }
+    const removed = await postRemoveActionItemToAgui(aguiBaseUrl, matchedId);
+    if (!removed) {
+      console.log(`[ctl] matched id ${matchedId} was no longer present`);
+      return { status: "not_found" };
+    }
+    console.log(`[ctl] removed action item: ${removed.title}`);
+    return { status: "removed", title: removed.title };
+  };
+
   const speaker = { id: "meeting", displayName: "Participant" };
   const realtimeVoice = createOpenAIRealtimeVoiceFromEnv(process.env, {
     delegate,
@@ -149,6 +200,12 @@ export function startCtlServer(
     },
     onCreateActionItems() {
       return createActionItems();
+    },
+    onAddActionItem(input) {
+      return addActionItem(input);
+    },
+    onRemoveActionItem(input) {
+      return removeActionItem(input);
     },
   });
   if (realtimeVoice.enabled) {
@@ -302,6 +359,73 @@ async function postActionItemsToAgui(baseUrl: string, items: ActionItem[]): Prom
     }
   } catch (error) {
     console.warn("[ctl] agui tasks POST failed", error);
+  }
+}
+
+async function postAddActionItemToAgui(
+  baseUrl: string,
+  item: { title: string; assignee?: string },
+): Promise<ActionItem | undefined> {
+  try {
+    const response = await fetch(`${baseUrl}/api/meeting/tasks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ op: "add", item }),
+    });
+    if (!response.ok) {
+      console.warn(`[ctl] agui add task POST failed (${response.status})`);
+      return undefined;
+    }
+    const data = (await response.json()) as { task?: ActionItem };
+    return data.task;
+  } catch (error) {
+    console.warn("[ctl] agui add task POST failed", error);
+    return undefined;
+  }
+}
+
+interface AguiTask {
+  id: string;
+  title: string;
+  assignee: string;
+}
+
+async function fetchActionItemsFromAgui(baseUrl: string): Promise<AguiTask[]> {
+  try {
+    const response = await fetch(`${baseUrl}/api/meeting/tasks`, {
+      headers: { Accept: "application/json" },
+    });
+    if (!response.ok) {
+      console.warn(`[ctl] agui tasks GET failed (${response.status})`);
+      return [];
+    }
+    const data = (await response.json()) as { tasks?: AguiTask[] };
+    return Array.isArray(data.tasks) ? data.tasks : [];
+  } catch (error) {
+    console.warn("[ctl] agui tasks GET failed", error);
+    return [];
+  }
+}
+
+async function postRemoveActionItemToAgui(
+  baseUrl: string,
+  id: string,
+): Promise<ActionItem | undefined> {
+  try {
+    const response = await fetch(`${baseUrl}/api/meeting/tasks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ op: "remove", id }),
+    });
+    if (!response.ok) {
+      console.warn(`[ctl] agui remove task POST failed (${response.status})`);
+      return undefined;
+    }
+    const data = (await response.json()) as { removed?: ActionItem | null };
+    return data.removed ?? undefined;
+  } catch (error) {
+    console.warn("[ctl] agui remove task POST failed", error);
+    return undefined;
   }
 }
 

@@ -15,6 +15,7 @@ import {
 import { initWeave } from "./observability";
 import type {
   ActionItem,
+  ActionItemMatchRequest,
   ActionItemsRequest,
   ActionItemStatus,
   CompanyDelegate,
@@ -72,6 +73,7 @@ export class TalonCompanyDelegate implements CompanyDelegate {
   private readonly bootstrapOp: (runtime: TalonRuntime) => Promise<void>;
   private readonly askOp: (request: CompanyDelegateRequest) => Promise<string>;
   private readonly actionItemsOp: (request: ActionItemsRequest) => Promise<ActionItem[]>;
+  private readonly matchActionItemOp: (request: ActionItemMatchRequest) => Promise<string | null>;
   private weaveInitPromise?: Promise<boolean>;
   private initPromise?: Promise<TalonRuntime>;
 
@@ -103,6 +105,10 @@ export class TalonCompanyDelegate implements CompanyDelegate {
     this.actionItemsOp = weave.op(this, this.actionItemsRuntime, {
       name: "alfred.talon.actionItems",
       summarize: items => ({ actionItemCount: items.length }),
+    });
+    this.matchActionItemOp = weave.op(this, this.matchActionItemRuntime, {
+      name: "alfred.talon.matchActionItem",
+      summarize: matchedId => ({ matchedId }),
     });
   }
 
@@ -245,6 +251,74 @@ export class TalonCompanyDelegate implements CompanyDelegate {
         "Talon action-item extraction timed out.",
       );
       return parseActionItems(answer);
+    } finally {
+      streamController.abort();
+      void answerPromise?.catch(() => undefined);
+    }
+  }
+
+  async matchActionItemForRemoval(request: ActionItemMatchRequest): Promise<string | null> {
+    if (!request.query.trim() || request.items.length === 0) return null;
+    await this.ensureWeave();
+    return this.matchActionItemOp(request);
+  }
+
+  private async matchActionItemRuntime(request: ActionItemMatchRequest): Promise<string | null> {
+    const runtime = await this.ensureRuntime();
+    const channel = await this.channelForMeeting(runtime, {
+      meetingId: request.meetingId,
+      speaker: { id: "alfred", displayName: "Alfred" },
+      question: "",
+    });
+    const requestId = crypto.randomUUID();
+    const streamController = new AbortController();
+    let answerPromise: Promise<string> | undefined;
+
+    try {
+      const response = await runtime.client.postChannelMessage(
+        new gateway.PostChannelMessageRequest({
+          ns: this.options.namespace,
+          channel,
+          authorKind: "user",
+          author: "Alfred",
+          content: actionItemMatchPrompt(request),
+          subscriptionNames: [CHANNEL_REPLY_SUBSCRIPTION],
+          labels: {
+            requestId,
+            meetingId: request.meetingId,
+            kind: "action-item-match",
+          },
+        }),
+      );
+      const routed = response.routedSessions.find(
+        session => session.subscription === CHANNEL_REPLY_SUBSCRIPTION,
+      );
+      if (!routed || routed.error || !routed.sessionId) {
+        throw new Error(
+          routed?.error || "Talon channel did not route action-item match to the delegate.",
+        );
+      }
+      console.log(
+        `[agent] Talon action-item match routed request=${requestId} channel=${channel} session=${routed.sessionId}`,
+      );
+
+      answerPromise = collectTalonAnswer(
+        runtime.client.streamSessionParts(
+          new gateway.StreamSessionPartsRequest({
+            ns: this.options.namespace,
+            agent: this.options.agentName,
+            sessionId: routed.sessionId,
+          }),
+          { signal: streamController.signal, timeoutMs: 0 },
+        ),
+      );
+
+      const answer = await withTimeout(
+        answerPromise,
+        this.options.timeoutMs,
+        "Talon action-item match timed out.",
+      );
+      return parseActionItemMatch(answer, request.items);
     } finally {
       streamController.abort();
       void answerPromise?.catch(() => undefined);
@@ -789,6 +863,38 @@ function extractJsonArray(value: string): string | undefined {
   const end = value.lastIndexOf("]");
   if (start === -1 || end === -1 || end < start) return undefined;
   return value.slice(start, end + 1);
+}
+
+function actionItemMatchPrompt(request: ActionItemMatchRequest): string {
+  const items = request.items.map(item => ({
+    id: item.id,
+    title: item.title,
+    assignee: item.assignee,
+  }));
+  return [
+    "A meeting participant wants to remove one action item from the list below.",
+    "Decide which single item they mean, allowing for paraphrase, synonyms, reordered or",
+    "missing words, and digits written as words.",
+    `Participant said: "${request.query}"`,
+    "Current action items (JSON):",
+    JSON.stringify(items),
+    'Respond with ONLY the "id" of the single best matching item. If no item is a reasonable',
+    'match, respond with exactly "none". Output just the id or "none" — no other text.',
+  ].join("\n");
+}
+
+// The model is asked to return a bare id (or "none"). Be liberal: accept the id even if
+// it arrives wrapped in punctuation/prose, but only if it is a real id from the list.
+function parseActionItemMatch(
+  answer: string,
+  items: ActionItemMatchRequest["items"],
+): string | null {
+  const normalized = answer.toLowerCase();
+  if (/\bnone\b/.test(normalized) && !items.some(item => normalized.includes(item.id.toLowerCase()))) {
+    return null;
+  }
+  const match = items.find(item => normalized.includes(item.id.toLowerCase()));
+  return match ? match.id : null;
 }
 
 function routedDelegateQuestion(question: string): string {

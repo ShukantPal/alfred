@@ -286,6 +286,14 @@ memory from `agent/`'s built-in stdio MCP server by default; set
 `TALON_COMPANY_MCP_URL` only when replacing it with an external HTTP
 Redis/company-memory MCP server.
 
+Alfred can also manage the shared action-items list by voice. `create_action_items`
+generates the list from the meeting transcript via the Talon subagent. `add_action_item`
+is a deterministic ctl-side mutation forwarded to agui's `/api/meeting/tasks` endpoint.
+`remove_action_item` is delegated: ctl fetches the current items and asks the Talon
+`matchActionItemForRemoval` subagent which item the spoken phrase refers to (handling
+paraphrase), then removes it by id. The screenshare Action Items panel polls that
+endpoint, so edits appear within a couple of seconds.
+
 If Alfred hears `start screenshare`, ctl calls Recall.ai's runtime Output Media
 endpoint for the active bot and starts `/media/screen` as a screenshare. The
 screen-share page is static and does not connect to `/ws/media` or play audio;

@@ -1,5 +1,7 @@
 export type {
   ActionItem,
+  ActionItemMatch,
+  ActionItemMatchRequest,
   ActionItemsRequest,
   ActionItemStatus,
   CompanyDelegate,

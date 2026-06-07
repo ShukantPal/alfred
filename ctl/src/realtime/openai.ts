@@ -34,6 +34,16 @@ export interface OpenAIRealtimeVoiceOptions {
    * them to the screenshare surface. Returns a short summary for the voice model.
    */
   onCreateActionItems(): Promise<{ count: number }>;
+  /** Add a single action item to the screenshare list (voice "add" command). */
+  onAddActionItem(input: { title: string; assignee?: string }): Promise<{
+    status: string;
+    title?: string;
+  }>;
+  /** Remove the action item matching the description (voice "remove" command). */
+  onRemoveActionItem(input: { title: string }): Promise<{
+    status: string;
+    title?: string;
+  }>;
 }
 
 type ConnectionState = "idle" | "connecting" | "open" | "ready" | "closed";
@@ -99,6 +109,8 @@ export class OpenAIRealtimeVoice {
   private readonly onAudioClear: () => void;
   private readonly onStartScreenshare: () => Promise<void> | void;
   private readonly onCreateActionItems: () => Promise<{ count: number }>;
+  private readonly onAddActionItem: OpenAIRealtimeVoiceOptions["onAddActionItem"];
+  private readonly onRemoveActionItem: OpenAIRealtimeVoiceOptions["onRemoveActionItem"];
   private readonly queuedAudio: string[] = [];
   private socket?: WebSocket;
   private state: ConnectionState = "idle";
@@ -146,6 +158,8 @@ export class OpenAIRealtimeVoice {
     this.onAudioClear = options.onAudioClear;
     this.onStartScreenshare = options.onStartScreenshare;
     this.onCreateActionItems = options.onCreateActionItems;
+    this.onAddActionItem = options.onAddActionItem;
+    this.onRemoveActionItem = options.onRemoveActionItem;
   }
 
   get enabled(): boolean {
@@ -312,6 +326,45 @@ export class OpenAIRealtimeVoice {
             parameters: {
               type: "object",
               properties: {},
+              additionalProperties: false,
+            },
+          },
+          {
+            type: "function",
+            name: "add_action_item",
+            description:
+              "Add a single action item to the shared action-items list. Call when a participant asks Alfred to add, create, or note one specific to-do, task, or follow-up.",
+            parameters: {
+              type: "object",
+              properties: {
+                title: {
+                  type: "string",
+                  description: "A concise description of the action item.",
+                },
+                assignee: {
+                  type: "string",
+                  description: "Who owns the item, if stated; omit if unknown.",
+                },
+              },
+              required: ["title"],
+              additionalProperties: false,
+            },
+          },
+          {
+            type: "function",
+            name: "remove_action_item",
+            description:
+              "Remove a single action item from the shared action-items list. Call when a participant asks Alfred to remove, delete, or drop a specific to-do. Provide the title or a short description of the item to remove.",
+            parameters: {
+              type: "object",
+              properties: {
+                title: {
+                  type: "string",
+                  description:
+                    "The title or a short description identifying the action item to remove.",
+                },
+              },
+              required: ["title"],
               additionalProperties: false,
             },
           },
@@ -562,6 +615,24 @@ export class OpenAIRealtimeVoice {
             error: error instanceof Error ? error.message : String(error),
           };
         }
+      case "add_action_item": {
+        const args = parseFunctionArgs(item.arguments);
+        const title = typeof args.title === "string" ? args.title.trim() : "";
+        if (!title) return { status: "failed", error: "An action item title is required." };
+        const assignee =
+          typeof args.assignee === "string" && args.assignee.trim()
+            ? args.assignee.trim()
+            : undefined;
+        return await this.onAddActionItem({ title, assignee });
+      }
+      case "remove_action_item": {
+        const args = parseFunctionArgs(item.arguments);
+        const title = typeof args.title === "string" ? args.title.trim() : "";
+        if (!title) {
+          return { status: "failed", error: "Specify which action item to remove." };
+        }
+        return await this.onRemoveActionItem({ title });
+      }
       default:
         return {
           status: "ignored",
@@ -719,7 +790,7 @@ Call delegate_to_company_agent for factual questions that need internal company 
 When the user asks Alfred to share the screen, show the screen, present, or start screenshare, call start_screenshare. Confirm briefly after the tool returns.
 
 # Action items
-When the user asks Alfred to create, generate, or summarize action items, to-dos, follow-ups, or next steps, call create_action_items. After the tool returns, confirm briefly how many action items were captured.
+When the user asks Alfred to create, generate, or summarize action items, to-dos, follow-ups, or next steps, call create_action_items, then confirm briefly how many were captured. To add one specific item, call add_action_item with a concise title and an assignee if one was stated. To remove one, call remove_action_item with the title or a short description of the item. After an add or remove, confirm briefly; if a remove returns not_found, say you could not find a matching item.
 
 # Voice Style
 Be concise, natural, and direct. Speak at a brisk conversational pace, not slowly. Answer in one sentence by default, two only when necessary. Do not add filler, throat-clearing, long acknowledgements, or tool-use preambles.
