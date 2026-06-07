@@ -113,6 +113,7 @@ async function main() {
     }
 
     console.log(`[demo] public base URL: ${publicBaseUrl}`);
+    ctlServer.setPublicBaseUrl(publicBaseUrl);
     console.log(`[demo] Recall webhook URL: ${publicBaseUrl}/webhooks/recall`);
     const mediaPath =
       config.outputMediaMode === "screenshare" ? "screen" : config.outputMediaMode;

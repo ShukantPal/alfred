@@ -12,6 +12,8 @@ export interface CtlServer {
   broadcast(message: unknown): void;
   /** Point ctl at the agui Next app so live transcripts reach meeting notes. */
   setAguiBaseUrl(url: string | undefined): void;
+  /** ctl's own public URL, shared with agui so the page can open the notes WS. */
+  setPublicBaseUrl(url: string | undefined): void;
 }
 
 export interface CtlServerOptions {
@@ -54,8 +56,21 @@ export function startCtlServer(
   // Forward live meeting transcripts to the agui Next app so the meeting-notes
   // panel can summarize them. Fed by OpenAI Realtime input transcription below.
   let aguiBaseUrl = normalizeAguiBaseUrl(process.env.ALFRED_AGUI_PUBLIC_BASE_URL);
+  let ctlPublicBaseUrl = normalizeAguiBaseUrl(process.env.ALFRED_CTL_PUBLIC_BASE_URL);
   let warnedNoAgui = false;
+  // Push each utterance to /ws/notes subscribers for instant (sub-second) rendering
+  // on the screenshare surface. The agui HTTP buffer (POST below) remains the source
+  // of truth for catch-up polling and the end-of-meeting transcript/summary.
+  const broadcastUtteranceToNotes = (utterance: MeetingUtterance) => {
+    const notesSockets = [...sockets].filter(socket => socket.data.path === "/ws/notes");
+    if (notesSockets.length === 0) return;
+    const serialized = JSON.stringify({ type: "utterance", utterance });
+    for (const socket of notesSockets) {
+      socket.send(serialized);
+    }
+  };
   const forwardUtterance = (utterance: MeetingUtterance) => {
+    broadcastUtteranceToNotes(utterance);
     if (!aguiBaseUrl) {
       if (!warnedNoAgui) {
         console.warn("[ctl] meeting notes disabled until agui URL is configured");
@@ -64,6 +79,13 @@ export function startCtlServer(
       return;
     }
     void postUtteranceToAgui(aguiBaseUrl, utterance);
+  };
+
+  // Hand agui ctl's public URL so the screenshare page can derive the notes WS
+  // endpoint. Best-effort: if it fails, the page falls back to polling only.
+  const pushConfigToAgui = () => {
+    if (!aguiBaseUrl || !ctlPublicBaseUrl) return;
+    void postConfigToAgui(aguiBaseUrl, ctlPublicBaseUrl);
   };
 
   const speaker = { id: "meeting", displayName: "Participant" };
@@ -117,7 +139,11 @@ export function startCtlServer(
     fetch(request, bunServer) {
       const url = new URL(request.url);
 
-      if (url.pathname === "/ws/recall" || url.pathname === "/ws/media") {
+      if (
+        url.pathname === "/ws/recall" ||
+        url.pathname === "/ws/media" ||
+        url.pathname === "/ws/notes"
+      ) {
         const upgraded = bunServer.upgrade(request, {
           data: { path: url.pathname },
         });
@@ -181,8 +207,35 @@ export function startCtlServer(
       if (aguiBaseUrl) {
         console.log(`[ctl] meeting notes -> ${aguiBaseUrl}/api/meeting/transcript`);
       }
+      pushConfigToAgui();
+    },
+    setPublicBaseUrl(url) {
+      ctlPublicBaseUrl = normalizeAguiBaseUrl(url);
+      if (ctlPublicBaseUrl) {
+        console.log(`[ctl] notes websocket -> ${toWsUrl(ctlPublicBaseUrl)}/ws/notes`);
+      }
+      pushConfigToAgui();
     },
   };
+}
+
+function toWsUrl(httpUrl: string): string {
+  return httpUrl.replace(/^http/, "ws");
+}
+
+async function postConfigToAgui(baseUrl: string, ctlPublicBaseUrl: string): Promise<void> {
+  try {
+    const response = await fetch(`${baseUrl}/api/meeting/config`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ctlBaseUrl: ctlPublicBaseUrl }),
+    });
+    if (!response.ok) {
+      console.warn(`[ctl] agui config POST failed (${response.status})`);
+    }
+  } catch (error) {
+    console.warn("[ctl] agui config POST failed", error);
+  }
 }
 
 function normalizeAguiBaseUrl(url: string | undefined): string | undefined {

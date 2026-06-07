@@ -1,9 +1,4 @@
-import {
-  pushUtterance,
-  recentUtterances,
-  subscribeUtterances,
-  utterancesSince,
-} from "@/lib/transcriptHub";
+import { pushUtterance, utterancesSince, allUtterances } from "@/lib/transcriptHub";
 import type { TranscriptUtterance } from "@/lib/meetingNotes";
 
 export const dynamic = "force-dynamic";
@@ -38,56 +33,25 @@ export async function POST(request: Request) {
   return Response.json({ ok: true });
 }
 
+// Buffer transport: plain JSON request/response. This backs both the live catch-up
+// poll and the end-of-meeting transcript. Live deltas are also pushed over ctl's
+// /ws/notes WebSocket for sub-second latency; polling stays as the reliable fallback
+// (SSE was dropped because Cloudflare quick tunnels buffer text/event-stream).
+//   ?after=<seq>  -> only utterances newer than the cursor (live catch-up)
+//   ?full=1       -> the entire retained transcript (end-of-meeting summary)
 export async function GET(request: Request) {
   const url = new URL(request.url);
-
-  // Polling transport: plain JSON request/response. Unlike SSE, this streams
-  // reliably through Cloudflare tunnels, so it's what the Recall-rendered
-  // screenshare surface uses. `?after=<seq>` returns only newer utterances.
-  if (url.searchParams.has("poll")) {
-    const after = Number.parseInt(url.searchParams.get("after") ?? "0", 10);
-    const { seq, utterances } = utterancesSince(Number.isFinite(after) ? after : 0);
+  if (url.searchParams.has("full")) {
+    const { seq, utterances } = allUtterances();
     return Response.json(
       { seq, utterances },
       { headers: { "Cache-Control": "no-store" } },
     );
   }
-
-  const encoder = new TextEncoder();
-  let unsubscribe: (() => void) | undefined;
-
-  const stream = new ReadableStream({
-    start(controller) {
-      const send = (event: string, data: unknown) => {
-        controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
-      };
-
-      for (const utterance of recentUtterances()) {
-        send("utterance", utterance);
-      }
-
-      unsubscribe = subscribeUtterances(utterance => send("utterance", utterance));
-
-      const heartbeat = setInterval(() => {
-        controller.enqueue(encoder.encode(": heartbeat\n\n"));
-      }, 15_000);
-
-      request.signal.addEventListener("abort", () => {
-        clearInterval(heartbeat);
-        unsubscribe?.();
-        controller.close();
-      });
-    },
-    cancel() {
-      unsubscribe?.();
-    },
-  });
-
-  return new Response(stream, {
-    headers: {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache, no-transform",
-      Connection: "keep-alive",
-    },
-  });
+  const after = Number.parseInt(url.searchParams.get("after") ?? "0", 10);
+  const { seq, utterances } = utterancesSince(Number.isFinite(after) ? after : 0);
+  return Response.json(
+    { seq, utterances },
+    { headers: { "Cache-Control": "no-store" } },
+  );
 }

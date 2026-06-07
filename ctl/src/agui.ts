@@ -93,12 +93,8 @@ export async function startAguiScreenshareServer(
   }
 
   const stop = () => {
-    if (!spawned || !child) return;
-    try {
-      if (child.pid) process.kill(child.pid, "SIGTERM");
-    } catch {
-      // The process may already be gone.
-    }
+    if (!spawned || !child?.pid) return;
+    stopChild(child);
   };
 
   try {
@@ -168,10 +164,14 @@ async function spawnNextAndWait(options: {
     const localBaseUrl = `http://127.0.0.1:${port}`;
     const url = `${localBaseUrl}${options.path}`;
 
+    // `detached: true` makes the child its own process-group leader so we can reap
+    // the whole tree on stop. `next dev` forks worker subprocesses that hold the
+    // port; signalling only the parent PID leaves them (and the port) alive.
     const child = spawn(options.nextBin, ["dev", "-p", String(port)], {
       cwd: options.aguiDir,
       env: { ...options.env, PORT: String(port) },
       stdio: ["ignore", options.out, options.out],
+      detached: true,
     });
 
     if (!child.pid) {
@@ -206,10 +206,25 @@ async function spawnNextAndWait(options: {
 }
 
 function stopChild(child: ChildProcess): void {
+  const pid = child.pid;
+  if (!pid) return;
+  killProcessTree(pid, "SIGTERM");
+  // next dev can ignore/slow-walk SIGTERM; force-kill the group shortly after.
+  // unref so this timer never keeps ctl alive on its way out.
+  setTimeout(() => killProcessTree(pid, "SIGKILL"), 2_000).unref();
+}
+
+// Signal the child's entire process group (negative pid). Falls back to the bare
+// pid if the group is gone, e.g. the child was never detached.
+function killProcessTree(pid: number, signal: NodeJS.Signals): void {
   try {
-    if (child.pid) process.kill(child.pid, "SIGTERM");
+    process.kill(-pid, signal);
   } catch {
-    // The process may already be gone.
+    try {
+      process.kill(pid, signal);
+    } catch {
+      // The process is already gone.
+    }
   }
 }
 
