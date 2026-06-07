@@ -1,6 +1,8 @@
 "use client";
 
 import { AlfredLanding } from "@/components/AlfredLanding";
+import { ChatMode } from "@/components/ChatMode";
+import { useMeetingChat } from "@/components/ChatProvider";
 import { DEFAULT_APP_ID, type AppTab } from "@/lib/apps";
 
 interface AppWorkspaceProps {
@@ -9,6 +11,7 @@ interface AppWorkspaceProps {
 
 export function AppWorkspace({ app }: AppWorkspaceProps) {
   const isAlfredHome = app.id === DEFAULT_APP_ID;
+  const { mode } = useMeetingChat();
 
   return (
     <main className="app-workspace" data-app={app.id}>
@@ -23,21 +26,24 @@ export function AppWorkspace({ app }: AppWorkspaceProps) {
           </header>
         ) : null}
 
-        <div
-          className={
-            isAlfredHome
-              ? "app-workspace-card__body app-workspace-card__body--landing"
-              : "app-workspace-card__body"
-          }
-        >
-          {isAlfredHome ? (
-            <AlfredLanding />
-          ) : (
+        {isAlfredHome ? (
+          // Landing and chat are both mounted so the first delegated question can
+          // cross-fade between them. `mode` is the single source of truth.
+          <div className="app-workspace-card__body app-workspace-card__body--alfred" data-mode={mode}>
+            <div className="workspace-view workspace-view--landing">
+              <AlfredLanding />
+            </div>
+            <div className="workspace-view workspace-view--chat">
+              <ChatMode />
+            </div>
+          </div>
+        ) : (
+          <div className="app-workspace-card__body">
             <p className="app-workspace-placeholder">
               {app.label} preview — integration coming soon
             </p>
-          )}
-        </div>
+          </div>
+        )}
       </section>
     </main>
   );
