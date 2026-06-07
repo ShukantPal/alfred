@@ -60,7 +60,7 @@ export function readDemoConfig(argv: string[], env: NodeJS.ProcessEnv): DemoConf
     realtimeDelivery: readRealtimeDelivery(env.ALFRED_REALTIME_DELIVERY),
     outputMediaMode: readOutputMediaMode(env.ALFRED_OUTPUT_MEDIA),
     aguiScreenshare: readBoolean(env.ALFRED_AGUI_SCREENSHARE, true),
-    aguiDir: env.ALFRED_AGUI_DIR ?? join(process.cwd(), "agui"),
+    aguiDir: env.ALFRED_AGUI_DIR ?? join(resolveRepoRoot(), "agui"),
     aguiPort: readInteger(env.ALFRED_AGUI_PORT, 3000),
     aguiPublicBaseUrl: normalizeBaseUrl(env.ALFRED_AGUI_PUBLIC_BASE_URL),
     aguiScreensharePath: env.ALFRED_AGUI_SCREENSHARE_PATH ?? "/screenshare",
@@ -72,9 +72,13 @@ export class UsageError extends Error {
   name = "UsageError";
 }
 
-function loadRepoEnv(env: NodeJS.ProcessEnv): void {
+function resolveRepoRoot(): string {
   const sourceDir = fileURLToPath(new URL(".", import.meta.url));
-  const repoEnvPath = join(sourceDir, "..", "..", ".env");
+  return join(sourceDir, "..", "..");
+}
+
+function loadRepoEnv(env: NodeJS.ProcessEnv): void {
+  const repoEnvPath = join(resolveRepoRoot(), ".env");
   loadDotEnv({ path: repoEnvPath, processEnv: env, quiet: true });
 }
 
