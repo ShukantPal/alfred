@@ -6,6 +6,13 @@ export type {
   ActionItemStatus,
   CompanyDelegate,
   CompanyDelegateRequest,
+  VisualChartSpec,
+  VisualKind,
+  VisualPoint,
+  VisualRequest,
+  VisualSpec,
+  VisualTableSpec,
+  VisualTextSpec,
 } from "./types";
 export {
   createTalonCompanyDelegateFromEnv,

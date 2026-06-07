@@ -80,6 +80,20 @@ export function startCtlServer(
       socket.send(serialized);
     }
   };
+  // Tell the screenshare's headless CopilotKit client to run the alfred-visual agent
+  // for a free-form request. Transient trigger (ws-only); the agent then calls back
+  // into ctl's /api/visual -> Talon buildVisual to produce the chart.
+  const broadcastAguiRun = (question: string, afterTs?: number) => {
+    const notesSockets = [...sockets].filter(socket => socket.data.path === "/ws/notes");
+    if (notesSockets.length === 0) {
+      console.warn("[ctl] render_visual requested but no screenshare is connected to /ws/notes");
+      return;
+    }
+    const serialized = JSON.stringify({ type: "agui_run", question, afterTs });
+    for (const socket of notesSockets) {
+      socket.send(serialized);
+    }
+  };
   // Retain the full meeting transcript so the end-of-meeting action-item subagent
   // has the whole conversation. Generous cap as a memory guard, not a feature limit.
   const meetingTranscript: MeetingUtterance[] = [];
@@ -186,6 +200,13 @@ export function startCtlServer(
     return { status: "removed", title: removed.title };
   };
 
+  // Voice-triggered generative UI: tell the screenshare to run the headless
+  // CopilotKit agent, which fetches the Talon-built VisualSpec from /api/visual.
+  const renderVisual = (input: { question: string; afterTs?: number }): void => {
+    console.log(`[ctl] render_visual -> agui run: ${input.question}`);
+    broadcastAguiRun(input.question, input.afterTs);
+  };
+
   const speaker = { id: "meeting", displayName: "Participant" };
   const realtimeVoice = createOpenAIRealtimeVoiceFromEnv(process.env, {
     delegate,
@@ -227,6 +248,9 @@ export function startCtlServer(
     onRemoveActionItem(input) {
       return removeActionItem(input);
     },
+    onRenderVisual(input) {
+      renderVisual(input);
+    },
   });
   if (realtimeVoice.enabled) {
     console.log("[ctl] OpenAI Realtime voice enabled");
@@ -240,6 +264,33 @@ export function startCtlServer(
       // Recall transcript webhooks are ignored; ctl voice is driven by OpenAI Realtime audio.
     },
   });
+
+  // Run Alfred's visual delegate for a free-form request and return a VisualSpec.
+  // Called server-side by agui's CopilotKit Talon-bridge agent; the spoken answer
+  // still flows through the Realtime voice path separately.
+  const handleVisualRequest = async (request: Request): Promise<Response> => {
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return Response.json({ error: "invalid JSON" }, { status: 400 });
+    }
+    const record = body && typeof body === "object" ? (body as Record<string, unknown>) : {};
+    const question = typeof record.question === "string" ? record.question.trim() : "";
+    if (!question) {
+      return Response.json({ error: "question is required" }, { status: 400 });
+    }
+    try {
+      const spec = await delegate.buildVisual({ meetingId, question });
+      return Response.json({ spec });
+    } catch (error) {
+      console.error("[ctl] buildVisual failed", error);
+      return Response.json(
+        { error: error instanceof Error ? error.message : String(error) },
+        { status: 500 },
+      );
+    }
+  };
 
   const server: Server<WebSocketData> = Bun.serve<WebSocketData>({
     hostname,
@@ -258,6 +309,10 @@ export function startCtlServer(
         return upgraded
           ? undefined
           : Response.json({ error: "WebSocket upgrade failed" }, { status: 400 });
+      }
+
+      if (url.pathname === "/api/visual" && request.method === "POST") {
+        return handleVisualRequest(request);
       }
 
       return router.fetch(request);

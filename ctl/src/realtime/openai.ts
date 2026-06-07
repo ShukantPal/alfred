@@ -50,6 +50,13 @@ export interface OpenAIRealtimeVoiceOptions {
     status: string;
     title?: string;
   }>;
+  /**
+   * Show Alfred-decided generative UI (chart/table) on the screenshare for a
+   * free-form request. Delegated: the visual is built by Talon (`buildVisual`)
+   * via the agui CopilotKit bridge; ctl only triggers the run. The spoken answer
+   * still flows through the Realtime voice path.
+   */
+  onRenderVisual(input: { question: string; afterTs?: number }): void | Promise<void>;
 }
 
 /** A chat event ctl forwards to the agui screenshare chat view. */
@@ -60,6 +67,8 @@ export interface ChatMessageEvent {
   kind?: "text" | "voice";
   text?: string;
   status?: "thinking" | "speaking" | "done";
+  /** Epoch ms for timeline ordering on the screenshare chat view. */
+  ts?: number;
 }
 
 type ConnectionState = "idle" | "connecting" | "open" | "ready" | "closed";
@@ -128,6 +137,7 @@ export class OpenAIRealtimeVoice {
   private readonly onCreateActionItems: () => Promise<{ count: number }>;
   private readonly onAddActionItem: OpenAIRealtimeVoiceOptions["onAddActionItem"];
   private readonly onRemoveActionItem: OpenAIRealtimeVoiceOptions["onRemoveActionItem"];
+  private readonly onRenderVisual: OpenAIRealtimeVoiceOptions["onRenderVisual"];
   private readonly queuedAudio: string[] = [];
   private socket?: WebSocket;
   private state: ConnectionState = "idle";
@@ -190,6 +200,7 @@ export class OpenAIRealtimeVoice {
     this.onCreateActionItems = options.onCreateActionItems;
     this.onAddActionItem = options.onAddActionItem;
     this.onRemoveActionItem = options.onRemoveActionItem;
+    this.onRenderVisual = options.onRenderVisual;
   }
 
   get enabled(): boolean {
@@ -321,9 +332,33 @@ export class OpenAIRealtimeVoice {
         tools: [
           {
             type: "function",
+            name: "render_visual",
+            description:
+              "Show Alfred-decided generative UI (chart, graph, or table) on the shared screen. " +
+              "PREFERRED for quantitative company data: finances, revenue, expenses, metrics, trends, " +
+              "comparisons, breakdowns, quarterly/annual reports, and any question whose best answer is " +
+              "numbers in a chart or table — even if the user does not say \"chart\" or \"graph\". " +
+              "Also use when they ask to show, pull up, display, visualize, or report data. " +
+              "Alfred picks the representation; you only provide what to visualize.",
+            parameters: {
+              type: "object",
+              properties: {
+                question: {
+                  type: "string",
+                  description:
+                    "A concise standalone description of what to visualize, e.g. \"last quarter's revenue by category\" or \"Q3 finances\".",
+                },
+              },
+              required: ["question"],
+              additionalProperties: false,
+            },
+          },
+          {
+            type: "function",
             name: "delegate_to_company_agent",
             description:
-              "Ask Alfred's Talon-backed delegate for internal company facts from company docs, Slack/project/meeting context, or for current public web lookup when needed.",
+              "Ask Alfred's Talon-backed delegate for internal company facts from company docs, Slack/project/meeting context, colleague notes, ship-readiness blockers, or current public web lookup. " +
+              "Do NOT use for quantitative data (finances, metrics, trends, breakdowns) — use render_visual instead so the answer appears as a chart or table on screen.",
             parameters: {
               type: "object",
               properties: {
@@ -771,6 +806,45 @@ export class OpenAIRealtimeVoice {
         }
         return await this.onRemoveActionItem({ title });
       }
+      case "render_visual": {
+        const args = parseFunctionArgs(item.arguments);
+        const question = typeof args.question === "string" ? args.question.trim() : "";
+        if (!question) {
+          return { status: "failed", error: "Describe what to visualize." };
+        }
+        console.log(`[ctl] realtime render_visual: ${truncateForLog(question, 240)}`);
+        // Surface the turn on the screenshare chat view (user text + Alfred waveform),
+        // then trigger the chart via the CopilotKit agui run. The chart is an additional
+        // Alfred-side message that slots into the timeline after the waveform.
+        const turnTs = Date.now();
+        this.onChatMessage?.({
+          op: "add",
+          id: crypto.randomUUID(),
+          role: "user",
+          kind: "text",
+          text: this.lastUserTranscript || question,
+          ts: turnTs,
+        });
+        const alfredId = crypto.randomUUID();
+        this.pendingChatAnswerId = alfredId;
+        this.onChatMessage?.({
+          op: "add",
+          id: alfredId,
+          role: "alfred",
+          kind: "voice",
+          status: "thinking",
+          ts: turnTs + 1,
+        });
+        try {
+          await this.onRenderVisual({ question, afterTs: turnTs + 2 });
+          return { status: "rendering" };
+        } catch (error) {
+          return {
+            status: "failed",
+            error: error instanceof Error ? error.message : String(error),
+          };
+        }
+      }
       default:
         return {
           status: "ignored",
@@ -924,8 +998,11 @@ Only speak when someone directly addresses Alfred or clearly asks the meeting bo
 # Answering
 Answer normal addressed questions directly when you can do so without private company context or current external lookup.
 
+# Visuals (prefer for numbers)
+When a question involves company metrics, finances, revenue, expenses, trends, comparisons, breakdowns, quarterly/annual figures, or any data best shown as a chart or table, call render_visual — even if the user only asks "what were…", "how did we do…", or "pull up the report" without saying "chart". Examples: quarterly finances, revenue by category, net income over time. Call ONLY render_visual for that request (not delegate_to_company_agent). Alfred picks the chart/table and it renders on the shared screen. After the tool returns you may give a brief spoken intro (one sentence); the chart carries the detail — do not read out every number.
+
 # Delegation
-Call delegate_to_company_agent for factual questions that need internal company docs, Slack/project/meeting context, colleague notes, or current public web lookup. For delegated questions, do not speak before the tool result is available. Call the tool at most once for a user question, then answer using that result. The delegation result is authoritative. If it says context is missing, say that plainly.
+Call delegate_to_company_agent for non-quantitative factual questions: colleague notes, ship readiness, blockers, project status, Slack context, policy/docs prose, or current public web lookup. Do not use delegate for finances, metrics, or other numeric data — use render_visual instead. For delegated questions, do not speak before the tool result is available. Call the tool at most once for a user question, then answer using that result. The delegation result is authoritative. If it says context is missing, say that plainly.
 
 # Screenshare
 When the user asks Alfred to share the screen, show the screen, present, or start screenshare, call start_screenshare. Confirm briefly after the tool returns.
@@ -946,7 +1023,9 @@ function responseInstructions(reason: string, addressedText?: string): string {
   }
 
   const base =
-    "If the user's request needs internal company context or current public information, call the appropriate tool silently and do not produce spoken content before the tool result. Otherwise answer concisely by voice.";
+    "If the request is about company metrics, finances, trends, or numeric breakdowns, call render_visual (not delegate_to_company_agent). " +
+    "If it needs other internal company context or current public information, call delegate_to_company_agent. " +
+    "Call the chosen tool silently and do not produce spoken content before the tool result. Otherwise answer concisely by voice.";
   const addressed = addressedText?.trim();
   if (addressed) {
     return `The user just addressed you with: "${addressed}". Respond only to this latest addressed request; do not answer earlier questions that were not addressed to you. If it contains no actual request, briefly ask how you can help. ${base}`;

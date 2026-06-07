@@ -69,13 +69,22 @@ context. Redis remains the intended production memory layer via an external comp
  (its own `weave.op` node, `alfred.talon.matchActionItem`) that resolves which existing item a
  spoken removal request refers to (handles paraphrase/synonyms) and returns the matching item id
  or null. ctl fetches the current items from agui, calls this from the `remove_action_item` tool
- path, then removes by id via `/api/meeting/tasks` (`{ op: "remove", id }`).
+  path, then removes by id via `/api/meeting/tasks` (`{ op: "remove", id }`).
+- `CompanyDelegate.buildVisual({ meetingId, question })` runs a subagent (its own `weave.op` node,
+  `alfred.talon.buildVisual`) that retrieves the relevant company data via the general memory tools
+  (`company_memory_search` / `company_memory_get`, which surface any doc's structured `data` payload)
+  and **chooses the representation**, returning a `VisualSpec`
+  (discriminated union: `pie | bar | line | table | text`). It is invoked from agui's CopilotKit
+  Talon-bridge agent over ctl's `/api/visual` HTTP endpoint, not from a ctl voice tool directly (see
+  "Voice-driven generative UI" below). `VisualSpec` is the ctl/agent contract type (mirrored in
+  `agui/lib/visual.ts`).
 - `CompanyDelegate.close()` stops the local Talon node.
 
 KEY RULE: ctl decides when the voice model may respond. ctl performs wake-word/address detection
 and the Realtime model only delegates after an addressed turn. agent/ is only called from the
-voice model's `delegate_to_company_agent` tool path (company-memory Q&A) or the
-`create_action_items` tool path (end-of-meeting action items).
+voice model's `delegate_to_company_agent` tool path (company-memory Q&A), the
+`create_action_items` tool path (end-of-meeting action items), or `buildVisual` (generative UI,
+reached via agui's bridge agent -> ctl `/api/visual`).
 
 The voice model can also edit the action-items list via the `add_action_item` and
 `remove_action_item` tools. `add_action_item` is a deterministic ctl-side mutation (no Talon): ctl
@@ -101,6 +110,33 @@ wrapped in `weave.op` (no new reasoning, no new voice tool). Mechanism:
   (`?after=<seq>` / `?full=1`), and renders via `ChatProvider` (derives `mode: "landing" | "chat"`),
   `ChatWatcher`, and `ChatMode`. Chat is in-memory only, like the transcript and tasks buffers.
 
+## Voice-driven generative UI (CopilotKit/AG-UI, headless)
+When a participant asks Alfred to show/visualize/chart company data, Alfred renders an
+Alfred-decided chart/table on the screenshare through **real CopilotKit/AG-UI**, re-skinned to match
+ChatMode. Talon stays the only brain; CopilotKit is a pure render client. Flow:
+- The Realtime model calls the delegated `render_visual` voice tool
+  (`ctl/src/realtime/openai.ts`). ctl shows the user's request + an Alfred voice bubble (same chat
+  transport as delegate), then ctl broadcasts `{ type: "agui_run", question }` over `/ws/notes`
+  (`ctl/src/server.ts` `broadcastAguiRun`). This trigger is ws-only (transient); the spoken answer
+  still flows on the Realtime path.
+- The screenshare is wrapped headless in `<CopilotKit runtimeUrl="/api/copilotkit">`
+  (`agui/app/screenshare/page.tsx`). `ChatWatcher` listens for `agui_run` and calls
+  `VisualAgentProvider.ask(question)`, which runs the `alfred-visual` agent programmatically via
+  `copilotkit.runAgent()` (the participant never types).
+- `alfred-visual` is a custom headless `AbstractAgent` (`agui/lib/talonVisualAgent.ts`) — a protocol
+  bridge with **no LLM**. It POSTs the question to ctl's `/api/visual`, which runs
+  `delegate.buildVisual` (the Talon `weave.op`), then emits AG-UI events: a `render_chart`
+  `TOOL_CALL_*` carrying the `VisualSpec`, plus `RUN_FINISHED`. Registered in
+  `agui/app/api/copilotkit/[[...path]]/route.ts` alongside the operator-console `default` agent.
+- `VisualAgentProvider` reads the agent's `render_chart` tool calls and renders the `VisualSpec` via
+  `agui/components/charts/VisualView.tsx` (Recharts) inside the existing ChatMode layout. A
+  dev-only typed trigger (`VisualDevConsole`, shown with `?dev=1`) calls the same `ask` for testing.
+- Decision: this **augments** the existing voice/waveform chat (kept as-is); CopilotKit only adds the
+  generative visual. Full migration of the whole transcript onto `useAgent` is a noted follow-on.
+- Seed data lives in `agent/src/company-memory.ts`: any memory doc may carry an optional structured
+  `data` payload (exact numbers for charts/tables), surfaced by the general `company_memory_*` tools.
+  No per-dataset tools — the whole memory corpus is the swap point for a real Sheets/Redis source.
+
 ## Voice tools: deterministic vs delegated (READ before adding a tool)
 There are two layers of model. (1) The OpenAI Realtime voice model in `ctl/src/realtime/openai.ts`
 always reasons and *picks* which tool to call. (2) What the tool then *does* is either deterministic
@@ -111,11 +147,13 @@ or delegated. Classify every new tool before building it:
   HTTP call. Do NOT route it through Talon and do NOT wrap it in `weave.op` — there is no reasoning
   to observe.
 - **Delegated tool** — its work *is* open-ended reasoning over fuzzy input such as a free-form
-  question, a whole transcript, or mapping a paraphrased phrase to an existing item (e.g.
-  `delegate_to_company_agent`, `create_action_items`, `remove_action_item`). This needs a second
-  LLM, so it MUST go through a `CompanyDelegate` method in `agent/` (Talon), and that method MUST be
-  wrapped in a `weave.op` so it shows in the Weave delegation tree. Talon is also where MCP tools
-  (company-memory, Google Workspace, DuckDuckGo) are available.
+  question, a whole transcript, mapping a paraphrased phrase to an existing item, or deciding how to
+  visualize data (e.g. `delegate_to_company_agent`, `create_action_items`, `remove_action_item`,
+  `render_visual`). This needs a second LLM, so it MUST go through a `CompanyDelegate` method in
+  `agent/` (Talon), and that method MUST be wrapped in a `weave.op` so it shows in the Weave
+  delegation tree. Talon is also where MCP tools (company-memory, Google Workspace, DuckDuckGo) are
+  available. Note `render_visual` reaches Talon indirectly: the ctl tool triggers an agui CopilotKit
+  run, and the agui bridge agent calls ctl `/api/visual` -> `buildVisual` (the `weave.op`).
 
 Rule of thumb: if you would need an LLM to decide the *result*, it is delegated (Talon + Weave).
 If the result is a mechanical mutation/side effect, it is deterministic (ctl only).
@@ -132,10 +170,12 @@ Steps to add a new voice tool:
    wrapped in a new `weave.op`, and update this file's contract section in the same commit.
 
 ## agent/ internals
-- `agent/src/types.ts`          — delegate interface used by ctl.
+- `agent/src/types.ts`          — delegate interface used by ctl (incl. `VisualSpec`/`buildVisual`).
 - `agent/src/talon.ts`          — starts Talon, configures provider, namespace, MCPs, agent, sessions.
-- `agent/src/memory-mcp.ts`     — built-in stdio MCP server for seeded company memory.
-- `agent/src/company-memory.ts` — seeded holiday/onboarding context used by the MCP server.
+- `agent/src/memory-mcp.ts`     — built-in stdio MCP server for seeded company memory (general
+  `company_memory_search` / `get` / `list`; `get`/`search` surface a doc's structured `data`).
+- `agent/src/company-memory.ts` — seeded holiday/onboarding context + datasets (docs may carry an
+  optional structured `data` payload, e.g. quarterly finances) used by the MCP server.
 - `agent/src/observability.ts`  — Weave initialization.
 - `agent/src/server.ts`         — long-running Talon bootstrap process for debugging.
 - `agent/src/demo-client.ts`    — one-shot Talon delegation demo.

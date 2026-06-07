@@ -7,6 +7,13 @@ export interface CompanyMemoryDoc {
   owner: string;
   url: string;
   text: string;
+  /**
+   * Optional machine-readable payload for this doc — exact numbers/tables the
+   * agent can turn into a chart or table. Intentionally untyped (any dataset
+   * shape) so memory scales to arbitrary datasets without per-dataset tools;
+   * general retrieval (search/get) surfaces it and the agent decides how to use it.
+   */
+  data?: Record<string, unknown>;
 }
 
 export interface CompanyMemoryResult extends CompanyMemoryDoc {
@@ -76,6 +83,58 @@ export const COMPANY_MEMORY_DOCS: CompanyMemoryDoc[] = [
     text:
       "Primary color is deep teal (#0E4C4C), display font is Fraunces, body is Sohne. Logo clear-space " +
       "is 1x the mark height. Do not place the logo on photographic backgrounds without the scrim.",
+  },
+  {
+    id: "sheet-quarterly-finances",
+    source: "drive",
+    title: "Quarterly Finances - Revenue, Expenses, Net Income",
+    owner: "Marco",
+    url: "https://docs.google.com/spreadsheets/d/quarterly-finances",
+    text:
+      "Company quarterly finances tracker (Q1-Q3 2025): total revenue, revenue by category " +
+      "(Subscriptions, Services, Marketplace, Other), total expenses, and net income. The exact " +
+      "per-quarter figures are in this document's structured data.",
+    data: {
+      unit: "USD",
+      quarters: [
+        {
+          quarter: "Q1 2025",
+          totalRevenue: 1_925_000,
+          totalExpenses: 1_540_000,
+          netIncome: 385_000,
+          revenueByCategory: [
+            { label: "Subscriptions", value: 1_280_000 },
+            { label: "Services", value: 410_000 },
+            { label: "Marketplace", value: 175_000 },
+            { label: "Other", value: 60_000 },
+          ],
+        },
+        {
+          quarter: "Q2 2025",
+          totalRevenue: 2_160_000,
+          totalExpenses: 1_690_000,
+          netIncome: 470_000,
+          revenueByCategory: [
+            { label: "Subscriptions", value: 1_460_000 },
+            { label: "Services", value: 395_000 },
+            { label: "Marketplace", value: 230_000 },
+            { label: "Other", value: 75_000 },
+          ],
+        },
+        {
+          quarter: "Q3 2025",
+          totalRevenue: 2_500_000,
+          totalExpenses: 1_820_000,
+          netIncome: 680_000,
+          revenueByCategory: [
+            { label: "Subscriptions", value: 1_720_000 },
+            { label: "Services", value: 380_000 },
+            { label: "Marketplace", value: 305_000 },
+            { label: "Other", value: 95_000 },
+          ],
+        },
+      ],
+    },
   },
   {
     id: "gdoc-q3-roadmap",

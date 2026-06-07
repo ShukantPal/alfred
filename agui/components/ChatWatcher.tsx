@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import type { ChatEvent, ChatMessage } from "@/lib/chat";
 import { useMeetingChat } from "@/components/ChatProvider";
+import { useVisualAgent } from "@/components/VisualAgentProvider";
 
 // Safety-net poll interval; the /ws/notes WebSocket delivers events instantly and
 // this poll guarantees catch-up / gap recovery (and is the sole transport if the WS
@@ -12,6 +13,7 @@ const WS_RETRY_MS = 3_000;
 
 export function ChatWatcher() {
   const { applyEvent } = useMeetingChat();
+  const { ask } = useVisualAgent();
 
   useEffect(() => {
     let stopped = false;
@@ -74,9 +76,20 @@ export function ChatWatcher() {
           const message = JSON.parse(event.data as string) as {
             type?: string;
             event?: ChatEvent;
+            question?: string;
+            afterTs?: number;
           };
           if (message.type === "chat" && message.event) {
             applyEvent(message.event);
+          } else if (message.type === "agui_run" && typeof message.question === "string") {
+            // Voice asked Alfred to visualize something: run the headless CopilotKit
+            // agent programmatically (the participant never types). `afterTs` keeps
+            // the chart after the user prompt + waveform in the shared timeline.
+            const afterTs =
+              typeof message.afterTs === "number" && Number.isFinite(message.afterTs)
+                ? message.afterTs
+                : undefined;
+            ask(message.question, afterTs);
           }
         } catch {
           // Ignore non-JSON / non-chat frames.
@@ -102,7 +115,7 @@ export function ChatWatcher() {
         ws.close();
       }
     };
-  }, [applyEvent]);
+  }, [applyEvent, ask]);
 
   return null;
 }

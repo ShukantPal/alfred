@@ -165,14 +165,19 @@ function formatSearchResults(results: CompanyMemoryResult[]): string {
 
 function formatDoc(doc: CompanyMemoryDoc | CompanyMemoryResult): string {
   const score = "score" in doc ? `\nScore: ${doc.score}` : "";
-  return [
+  const lines = [
     `ID: ${doc.id}`,
     `Source: ${doc.source}`,
     `Title: ${doc.title}`,
     `Owner: ${doc.owner}`,
     `URL: ${doc.url}${score}`,
     `Text: ${doc.text}`,
-  ].join("\n");
+  ];
+  // Surface any structured payload as exact JSON so the agent can chart/table it.
+  if (doc.data) {
+    lines.push(`Data (JSON): ${JSON.stringify(doc.data)}`);
+  }
+  return lines.join("\n");
 }
 
 function formatDocList(docs: Array<ReturnType<typeof summaryDoc>>): string {
@@ -180,8 +185,8 @@ function formatDocList(docs: Array<ReturnType<typeof summaryDoc>>): string {
   return docs.map(doc => `${doc.id} | ${doc.source} | ${doc.owner} | ${doc.title}`).join("\n");
 }
 
-function summaryDoc(doc: CompanyMemoryDoc): Omit<CompanyMemoryDoc, "text"> {
-  const { text: _text, ...summary } = doc;
+function summaryDoc(doc: CompanyMemoryDoc): Omit<CompanyMemoryDoc, "text" | "data"> {
+  const { text: _text, data: _data, ...summary } = doc;
   return summary;
 }
 
