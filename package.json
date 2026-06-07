@@ -9,6 +9,7 @@
     "agent"
   ],
   "scripts": {
+    "postinstall": "bun install --cwd agui",
     "check": "bun run check:ctl && bun run check:agent",
     "check:ctl": "bun run --cwd ctl check",
     "check:agent": "bun run --cwd agent check",
