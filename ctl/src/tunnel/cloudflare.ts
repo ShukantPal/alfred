@@ -59,7 +59,8 @@ export async function startCloudflareTunnel(
   if (
     existing?.targetUrl === options.localBaseUrl &&
     existing.url &&
-    isProcessAlive(existing.pid)
+    isProcessAlive(existing.pid) &&
+    (await isTunnelReachable(existing.url))
   ) {
     console.log(
       `[cloudflared] reusing ${options.name} tunnel ${existing.url} (pid ${existing.pid})`,
@@ -76,6 +77,8 @@ export async function startCloudflareTunnel(
   }
 
   if (existing?.pid && isProcessAlive(existing.pid)) {
+    // The process can linger (cloudflared retries forever) even after the quick
+    // tunnel URL stops resolving, so kill it and start a fresh tunnel.
     console.log(
       `[cloudflared] stopping stale ${options.name} tunnel for ${existing.targetUrl}`,
     );
@@ -159,10 +162,16 @@ export function stopPersistentTunnels(): void {
 }
 
 function resolveCloudflared(configured?: string): string {
+  // Ignore an unexpanded shell substitution (e.g. CLOUDFLARED_BIN="$(which
+  // cloudflared)") since dotenv stores it literally rather than evaluating it.
+  const configuredBin =
+    configured && !configured.includes("$") ? configured : undefined;
+
   const candidates = [
-    configured,
+    configuredBin,
     join(toolsDir, "cloudflared"),
     join(repoRoot, "..", "Take3", ".tools", "cloudflared"),
+    ...resolvePathCandidates("cloudflared"),
   ].filter(Boolean) as string[];
 
   for (const candidate of candidates) {
@@ -179,6 +188,15 @@ function resolveCloudflared(configured?: string): string {
       "Set CLOUDFLARED_BIN to an explicit binary path if needed.",
     ].join("\n"),
   );
+}
+
+function resolvePathCandidates(bin: string): string[] {
+  const pathEnv = process.env.PATH;
+  if (!pathEnv) return [];
+  return pathEnv
+    .split(":")
+    .filter(Boolean)
+    .map(dir => join(dir, bin));
 }
 
 async function waitForTunnelUrl(
@@ -229,6 +247,19 @@ function isExecutable(path: string | undefined): path is string {
   if (!path) return false;
   try {
     accessSync(path, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function isTunnelReachable(url: string): Promise<boolean> {
+  // A reused quick tunnel's process can stay alive while its hostname stops
+  // resolving. Any HTTP response (even 5xx from cloudflared, or 404 from the
+  // local server) proves the tunnel edge is reachable; only DNS/connection
+  // failures throw, which means the tunnel is dead and must be recreated.
+  try {
+    await fetch(url, { method: "GET", signal: AbortSignal.timeout(8_000) });
     return true;
   } catch {
     return false;

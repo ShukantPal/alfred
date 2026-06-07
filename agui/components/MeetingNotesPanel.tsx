@@ -1,7 +1,8 @@
 "use client";
 
+import { useMeetingNotes } from "@/components/MeetingNotesProvider";
 import { formatMeetingTime } from "@/lib/formatTime";
-import { mockMeetingNotes, type MeetingNote } from "@/lib/mockMeetingNotes";
+import type { MeetingNote } from "@/lib/meetingNotes";
 
 function NoteItem({ note }: { note: MeetingNote }) {
   return (
@@ -15,7 +16,7 @@ function NoteItem({ note }: { note: MeetingNote }) {
 }
 
 export function MeetingNotesPanel() {
-  const notes = mockMeetingNotes;
+  const { notes } = useMeetingNotes();
 
   return (
     <section className="alfred-card meeting-notes-panel">

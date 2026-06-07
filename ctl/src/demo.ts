@@ -113,6 +113,7 @@ async function main() {
     }
 
     console.log(`[demo] public base URL: ${publicBaseUrl}`);
+    ctlServer.setPublicBaseUrl(publicBaseUrl);
     console.log(`[demo] Recall webhook URL: ${publicBaseUrl}/webhooks/recall`);
     const mediaPath =
       config.outputMediaMode === "screenshare" ? "screen" : config.outputMediaMode;
@@ -132,6 +133,7 @@ async function main() {
           env: process.env,
         });
         console.log(`[demo] agui screenshare URL: ${agui.screenshareUrl}`);
+        ctlServer?.setAguiBaseUrl(agui.localBaseUrl);
       } catch (error) {
         console.error(
           "[demo] failed to start agui screenshare surface; falling back to ctl /media/screen",

@@ -1,4 +1,5 @@
 import type { CompanyDelegate, CompanyDelegateRequest } from "@alfred/agent";
+import type { MeetingUtterance } from "../transcript";
 
 export interface OpenAIRealtimeVoiceOptions {
   apiKey?: string;
@@ -21,6 +22,8 @@ export interface OpenAIRealtimeVoiceOptions {
   speaker: CompanyDelegateRequest["speaker"];
   delegate: CompanyDelegate;
   onStatus(message: string): void;
+  /** Every final input transcript (live meeting speech), for meeting-notes forwarding. */
+  onUtterance?(utterance: MeetingUtterance): void;
   onAudioStart(id: string, sampleRate: number): void;
   onAudio(bytes: Uint8Array): void;
   onAudioEnd(id: string): void;
@@ -84,6 +87,7 @@ export class OpenAIRealtimeVoice {
   private readonly speaker: CompanyDelegateRequest["speaker"];
   private readonly delegate: CompanyDelegate;
   private readonly onStatus: (message: string) => void;
+  private readonly onUtterance?: (utterance: MeetingUtterance) => void;
   private readonly onAudioStart: (id: string, sampleRate: number) => void;
   private readonly onAudio: (bytes: Uint8Array) => void;
   private readonly onAudioEnd: (id: string) => void;
@@ -123,6 +127,7 @@ export class OpenAIRealtimeVoice {
     this.speaker = options.speaker;
     this.delegate = options.delegate;
     this.onStatus = options.onStatus;
+    this.onUtterance = options.onUtterance;
     this.onAudioStart = options.onAudioStart;
     this.onAudio = options.onAudio;
     this.onAudioEnd = options.onAudioEnd;
@@ -371,6 +376,13 @@ export class OpenAIRealtimeVoice {
 
     console.log(`[ctl] realtime transcript: ${transcript}`);
     this.onStatus(`heard: ${transcript}`);
+
+    // Forward all meeting speech (not just wake-word turns) for live meeting notes.
+    this.onUtterance?.({
+      text: transcript,
+      speaker: this.speaker.displayName,
+      ts: Date.now(),
+    });
 
     if (!normalized.includes(this.wakeWord)) {
       console.log("[ctl] realtime turn ignored; wake word not present");
