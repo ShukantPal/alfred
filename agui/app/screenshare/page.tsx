@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import { AlfredSidePanel } from "@/components/AlfredSidePanel";
 import { AppTabBar } from "@/components/AppTabBar";
 import { AppWorkspace } from "@/components/AppWorkspace";
+import { MeetingNotesProvider } from "@/components/MeetingNotesProvider";
+import { MeetingNotesWatcher } from "@/components/MeetingNotesWatcher";
 import {
   DEFAULT_APP_ID,
   apps,
@@ -22,14 +24,17 @@ export default function ScreensharePage() {
   }, [activeApp]);
 
   return (
-    <div className="screenshare-shell">
-      <div className="screenshare-body">
-        <AlfredSidePanel />
-        <div className="screenshare-main">
-          <AppTabBar apps={apps} activeId={activeAppId} onSelect={setActiveAppId} />
-          <AppWorkspace app={activeApp} />
+    <MeetingNotesProvider>
+      <MeetingNotesWatcher />
+      <div className="screenshare-shell">
+        <div className="screenshare-body">
+          <AlfredSidePanel />
+          <div className="screenshare-main">
+            <AppTabBar apps={apps} activeId={activeAppId} onSelect={setActiveAppId} />
+            <AppWorkspace app={activeApp} />
+          </div>
         </div>
       </div>
-    </div>
+    </MeetingNotesProvider>
   );
 }

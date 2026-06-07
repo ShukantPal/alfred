@@ -132,6 +132,7 @@ async function main() {
           env: process.env,
         });
         console.log(`[demo] agui screenshare URL: ${agui.screenshareUrl}`);
+        ctlServer?.setAguiBaseUrl(agui.localBaseUrl);
       } catch (error) {
         console.error(
           "[demo] failed to start agui screenshare surface; falling back to ctl /media/screen",

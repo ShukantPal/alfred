@@ -3,12 +3,15 @@ import { createTalonCompanyDelegateFromEnv } from "@alfred/agent";
 import { extractRecallMixedAudio } from "./recall/audio";
 import { createOpenAIRealtimeVoiceFromEnv } from "./realtime/openai";
 import { createRouter } from "./routes";
+import type { MeetingUtterance } from "./transcript";
 
 export interface CtlServer {
   localBaseUrl: string;
   port: number;
   stop(): Promise<void>;
   broadcast(message: unknown): void;
+  /** Point ctl at the agui Next app so live transcripts reach meeting notes. */
+  setAguiBaseUrl(url: string | undefined): void;
 }
 
 export interface CtlServerOptions {
@@ -48,6 +51,21 @@ export function startCtlServer(
   const delegate = createTalonCompanyDelegateFromEnv(process.env);
   console.log(`[ctl] Talon delegate configured (meeting ${meetingId})`);
 
+  // Forward live meeting transcripts to the agui Next app so the meeting-notes
+  // panel can summarize them. Fed by OpenAI Realtime input transcription below.
+  let aguiBaseUrl = normalizeAguiBaseUrl(process.env.ALFRED_AGUI_PUBLIC_BASE_URL);
+  let warnedNoAgui = false;
+  const forwardUtterance = (utterance: MeetingUtterance) => {
+    if (!aguiBaseUrl) {
+      if (!warnedNoAgui) {
+        console.warn("[ctl] meeting notes disabled until agui URL is configured");
+        warnedNoAgui = true;
+      }
+      return;
+    }
+    void postUtteranceToAgui(aguiBaseUrl, utterance);
+  };
+
   const speaker = { id: "meeting", displayName: "Participant" };
   const realtimeVoice = createOpenAIRealtimeVoiceFromEnv(process.env, {
     delegate,
@@ -56,6 +74,7 @@ export function startCtlServer(
     onStatus(message) {
       sendMediaJson(sockets, { type: "status", message });
     },
+    onUtterance: forwardUtterance,
     onAudioStart(id, sampleRate) {
       sendMediaJson(sockets, {
         type: "speak_stream_start",
@@ -157,7 +176,34 @@ export function startCtlServer(
       server.stop(true);
     },
     broadcast,
+    setAguiBaseUrl(url) {
+      aguiBaseUrl = normalizeAguiBaseUrl(url);
+      if (aguiBaseUrl) {
+        console.log(`[ctl] meeting notes -> ${aguiBaseUrl}/api/meeting/transcript`);
+      }
+    },
   };
+}
+
+function normalizeAguiBaseUrl(url: string | undefined): string | undefined {
+  if (!url) return undefined;
+  const trimmed = url.trim().replace(/\/$/, "");
+  return trimmed || undefined;
+}
+
+async function postUtteranceToAgui(baseUrl: string, utterance: MeetingUtterance): Promise<void> {
+  try {
+    const response = await fetch(`${baseUrl}/api/meeting/transcript`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(utterance),
+    });
+    if (!response.ok) {
+      console.warn(`[ctl] agui transcript POST failed (${response.status})`);
+    }
+  } catch (error) {
+    console.warn("[ctl] agui transcript POST failed", error);
+  }
 }
 
 function sendMediaJson(sockets: Set<MediaSocket>, message: MediaCommand): void {

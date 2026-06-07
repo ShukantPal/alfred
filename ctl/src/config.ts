@@ -77,7 +77,7 @@ function resolveRepoRoot(): string {
   return join(sourceDir, "..", "..");
 }
 
-function loadRepoEnv(env: NodeJS.ProcessEnv): void {
+export function loadRepoEnv(env: NodeJS.ProcessEnv = process.env): void {
   const repoEnvPath = join(resolveRepoRoot(), ".env");
   loadDotEnv({ path: repoEnvPath, processEnv: env, quiet: true });
 }
