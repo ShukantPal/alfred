@@ -56,7 +56,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         role: event.role,
         kind: event.kind,
         text: typeof event.text === "string" ? event.text : undefined,
-        status: event.kind === "voice" ? (event.status ?? "speaking") : event.status,
+        status: event.kind === "voice" ? (event.status ?? "thinking") : event.status,
         ts: typeof event.ts === "number" ? event.ts : Date.now(),
       };
       if (existingIndex >= 0) {

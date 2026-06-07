@@ -35,7 +35,7 @@ function parseEvent(body: unknown): ChatEvent | undefined {
 }
 
 function parseStatus(value: unknown): ChatStatus | undefined {
-  if (value === "speaking" || value === "done") return value;
+  if (value === "thinking" || value === "speaking" || value === "done") return value;
   return undefined;
 }
 

@@ -34,7 +34,7 @@ export function addMessage(input: AddInput): ChatMessage {
     role: input.role,
     kind: input.kind,
     text: typeof input.text === "string" ? input.text.trim() : undefined,
-    status: input.kind === "voice" ? (input.status ?? "speaking") : input.status,
+    status: input.kind === "voice" ? (input.status ?? "thinking") : input.status,
     ts: typeof input.ts === "number" && Number.isFinite(input.ts) ? input.ts : Date.now(),
   };
   seq += 1;

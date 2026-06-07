@@ -1,6 +1,6 @@
 export type ChatRole = "user" | "alfred";
 export type ChatKind = "text" | "voice";
-export type ChatStatus = "speaking" | "done";
+export type ChatStatus = "thinking" | "speaking" | "done";
 
 export interface ChatMessage {
   id: string;

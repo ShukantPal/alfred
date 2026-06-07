@@ -59,7 +59,7 @@ export interface ChatMessageEvent {
   role?: "user" | "alfred";
   kind?: "text" | "voice";
   text?: string;
-  status?: "speaking" | "done";
+  status?: "thinking" | "speaking" | "done";
 }
 
 type ConnectionState = "idle" | "connecting" | "open" | "ready" | "closed";
@@ -151,6 +151,12 @@ export class OpenAIRealtimeVoice {
   // The most recent final user STT, shown verbatim in the chat user bubble (the
   // delegate tool argument is a model reformulation, not what the user said).
   private lastUserTranscript?: string;
+  // Playback bookkeeping so Alfred's waveform settles when the meeting audio
+  // actually finishes. response.done fires earlier because Realtime streams audio
+  // faster than realtime playback, so we estimate the end from the PCM bytes sent.
+  private pendingChatAudioStartedAt?: number;
+  private pendingChatAudioBytes = 0;
+  private pendingChatSettleTimer?: ReturnType<typeof setTimeout>;
 
   constructor(options: OpenAIRealtimeVoiceOptions) {
     this.apiKey = options.apiKey;
@@ -543,8 +549,17 @@ export class OpenAIRealtimeVoice {
       this.activeAudioId = id;
       this.lastAudioStartedAt = Date.now();
       this.onAudioStart(id, this.outputSampleRate);
+      // The spoken answer is now playing — flip the pending chat bubble from
+      // "thinking" (dots) to "speaking" (waveform) and start tracking playback.
+      if (this.pendingChatAnswerId) {
+        this.pendingChatAudioStartedAt = Date.now();
+        this.pendingChatAudioBytes = 0;
+        this.onChatMessage?.({ op: "update", id: this.pendingChatAnswerId, status: "speaking" });
+      }
     }
-    this.onAudio(Buffer.from(event.delta, "base64"));
+    const audio = Buffer.from(event.delta, "base64");
+    if (this.pendingChatAnswerId) this.pendingChatAudioBytes += audio.length;
+    this.onAudio(audio);
   }
 
   private endActiveAudio(responseId?: string): void {
@@ -568,6 +583,8 @@ export class OpenAIRealtimeVoice {
     }
     this.activeAudioId = undefined;
     this.lastAudioStartedAt = undefined;
+    // Alfred was cut off — stop the waveform now rather than at the estimated end.
+    this.finalizePendingChatAnswerNow();
   }
 
   private clearPlaybackForToolCall(): void {
@@ -580,13 +597,50 @@ export class OpenAIRealtimeVoice {
 
   // Settle Alfred's pending chat waveform once the spoken answer finishes. The
   // function-call response itself (which carries the delegate output) is skipped so
-  // we only settle on the subsequent audio reply.
+  // we only act on the subsequent audio reply. response.done fires when generation
+  // completes, but the meeting audio keeps playing (it streams faster than
+  // realtime), so we schedule the "done" for the estimated playback end instead of
+  // settling immediately — otherwise the waveform stops well before Alfred does.
   private settlePendingChatAnswer(output: RealtimeOutputItem[]): void {
     if (!this.pendingChatAnswerId) return;
     if (output.some(item => item.type === "function_call")) return;
+
     const id = this.pendingChatAnswerId;
+    const samples = this.pendingChatAudioBytes / 2; // 16-bit mono PCM
+    const durationMs =
+      this.outputSampleRate > 0 ? (samples / this.outputSampleRate) * 1000 : 0;
+    const startedAt = this.pendingChatAudioStartedAt ?? Date.now();
+    // Cover the media page's scheduling lead + silence tail and a little slack so
+    // the waveform never cuts off early.
+    const PLAYBACK_TAIL_MS = 300;
+    const remainingMs = Math.max(0, startedAt + durationMs + PLAYBACK_TAIL_MS - Date.now());
+
+    this.clearPendingChatSettleTimer();
+    this.pendingChatSettleTimer = setTimeout(() => {
+      this.pendingChatSettleTimer = undefined;
+      // Guard against a newer answer having taken over in the meantime.
+      if (this.pendingChatAnswerId !== id) return;
+      this.finalizePendingChatAnswerNow();
+    }, remainingMs);
+  }
+
+  // Settle the waveform immediately (playback ended early, e.g. a barge-in
+  // interruption truncated Alfred's reply).
+  private finalizePendingChatAnswerNow(): void {
+    this.clearPendingChatSettleTimer();
+    const id = this.pendingChatAnswerId;
+    if (!id) return;
     this.pendingChatAnswerId = undefined;
+    this.pendingChatAudioStartedAt = undefined;
+    this.pendingChatAudioBytes = 0;
     this.onChatMessage?.({ op: "update", id, status: "done" });
+  }
+
+  private clearPendingChatSettleTimer(): void {
+    if (this.pendingChatSettleTimer) {
+      clearTimeout(this.pendingChatSettleTimer);
+      this.pendingChatSettleTimer = undefined;
+    }
   }
 
   private async handleFunctionCalls(items: RealtimeOutputItem[]): Promise<void> {
@@ -662,12 +716,14 @@ export class OpenAIRealtimeVoice {
           });
           const alfredId = crypto.randomUUID();
           this.pendingChatAnswerId = alfredId;
+          // Start as "thinking" (bouncing dots) while the delegate runs; flipped to
+          // "speaking" (waveform) once the spoken answer's audio actually begins.
           this.onChatMessage?.({
             op: "add",
             id: alfredId,
             role: "alfred",
             kind: "voice",
-            status: "speaking",
+            status: "thinking",
           });
         }
         const answer = question ? await this.askDelegateOnce(question) : "No question was provided for delegation.";

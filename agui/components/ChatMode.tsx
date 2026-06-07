@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react";
 import type { ChatMessage } from "@/lib/chat";
 import { useMeetingChat } from "@/components/ChatProvider";
+import { ThinkingDots } from "@/components/ThinkingDots";
 import { Waveform } from "@/components/Waveform";
 
 // The screenshare main-window view once Alfred is asked a reasoning question.
@@ -36,7 +37,11 @@ function ChatBubble({ message }: { message: ChatMessage }) {
     <li className={`chat-row chat-row--${isUser ? "user" : "alfred"}`}>
       <div className={`chat-bubble chat-bubble--${isUser ? "user" : "alfred"}`}>
         {message.kind === "voice" ? (
-          <Waveform speaking={message.status !== "done"} />
+          message.status === "thinking" ? (
+            <ThinkingDots />
+          ) : (
+            <Waveform speaking={message.status === "speaking"} />
+          )
         ) : (
           <span className="chat-bubble__text">{message.text}</span>
         )}
