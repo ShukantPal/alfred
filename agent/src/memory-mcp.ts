@@ -1,8 +1,10 @@
 import { createInterface } from "node:readline";
 import {
   COMPANY_MEMORY_DOCS,
+  getCompanyFinance,
   getCompanyMemoryDoc,
   searchCompanyMemory,
+  type CompanyFinanceQuarter,
   type CompanyMemoryDoc,
   type CompanyMemoryResult,
 } from "./company-memory";
@@ -75,6 +77,17 @@ const tools = [
           maximum: 20,
         },
       },
+    },
+  },
+  {
+    name: "company_finance",
+    description:
+      "Return the company's structured quarterly finances (most recent last): total revenue, " +
+      "revenue split by category, total expenses, and net income per quarter. Use this for exact " +
+      "numbers when asked to chart, visualize, or summarize the quarterly finances.",
+    inputSchema: {
+      type: "object",
+      properties: {},
     },
   },
 ];
@@ -153,6 +166,10 @@ function callTool(params: ToolCallParams): unknown {
       const docs = COMPANY_MEMORY_DOCS.slice(0, limit).map(summaryDoc);
       return toolTextResult(formatDocList(docs), { docs });
     }
+    case "company_finance": {
+      const quarters = getCompanyFinance();
+      return toolTextResult(formatFinance(quarters), { quarters });
+    }
     default:
       throw new Error(`Unknown company-memory tool: ${params.name ?? "<missing>"}`);
   }
@@ -173,6 +190,24 @@ function formatDoc(doc: CompanyMemoryDoc | CompanyMemoryResult): string {
     `URL: ${doc.url}${score}`,
     `Text: ${doc.text}`,
   ].join("\n");
+}
+
+function formatFinance(quarters: CompanyFinanceQuarter[]): string {
+  if (quarters.length === 0) return "No quarterly finance data is available.";
+  return quarters
+    .map(quarter => {
+      const breakdown = quarter.revenueByCategory
+        .map(line => `${line.label}: ${line.value}`)
+        .join(", ");
+      return [
+        `Quarter: ${quarter.quarter} (${quarter.currency})`,
+        `Total revenue: ${quarter.totalRevenue}`,
+        `Revenue by category: ${breakdown}`,
+        `Total expenses: ${quarter.totalExpenses}`,
+        `Net income: ${quarter.netIncome}`,
+      ].join("\n");
+    })
+    .join("\n\n");
 }
 
 function formatDocList(docs: Array<ReturnType<typeof summaryDoc>>): string {

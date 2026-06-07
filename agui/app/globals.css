@@ -637,6 +637,110 @@ body {
   word-break: break-word;
 }
 
+/* Alfred-chosen generative UI (charts/tables) rendered in the chat view. Sits in
+   an Alfred-side row, wider than a text bubble so charts have room to breathe. */
+.chat-visual {
+  margin: 0;
+  width: min(620px, 92%);
+  padding: 16px 18px;
+  border-radius: 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-bottom-left-radius: 6px;
+  box-shadow: var(--shadow-sm);
+  animation: chat-bubble-in 0.28s ease;
+}
+
+.chat-visual__header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 12px;
+}
+
+.chat-visual__title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.chat-visual__subtitle {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.chat-visual__chart {
+  width: 100%;
+  height: 260px;
+}
+
+.chat-visual__table-wrap {
+  overflow-x: auto;
+}
+
+.chat-visual__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.chat-visual__table th,
+.chat-visual__table td {
+  padding: 8px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.chat-visual__table th {
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.chat-visual__text {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Dev-only generative-UI trigger (?dev=1). Not shown in the meeting video. */
+.visual-dev-console {
+  position: fixed;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 50;
+  display: flex;
+  gap: 8px;
+  padding: 8px;
+  border-radius: 12px;
+  background: rgba(17, 24, 39, 0.92);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.25);
+}
+
+.visual-dev-console__input {
+  width: 320px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: #ffffff;
+  font-size: 14px;
+  color: var(--text);
+}
+
+.visual-dev-console__button {
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: none;
+  background: #ffffff;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
 @keyframes chat-bubble-in {
   from {
     opacity: 0;

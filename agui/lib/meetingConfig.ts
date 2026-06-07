@@ -16,3 +16,8 @@ export function getNotesWsUrl(): string | undefined {
   if (!ctlBaseUrl) return undefined;
   return `${ctlBaseUrl.replace(/^http/, "ws")}/ws/notes`;
 }
+
+/** ctl's public HTTP base URL (for server-side calls like the visual delegate). */
+export function getCtlBaseUrl(): string | undefined {
+  return ctlBaseUrl;
+}

@@ -6,7 +6,19 @@ export type {
   ActionItemStatus,
   CompanyDelegate,
   CompanyDelegateRequest,
+  VisualChartSpec,
+  VisualKind,
+  VisualPoint,
+  VisualRequest,
+  VisualSpec,
+  VisualTableSpec,
+  VisualTextSpec,
 } from "./types";
+export {
+  COMPANY_FINANCE,
+  getCompanyFinance,
+  type CompanyFinanceQuarter,
+} from "./company-memory";
 export {
   createTalonCompanyDelegateFromEnv,
   TalonCompanyDelegate,

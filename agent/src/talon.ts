@@ -20,6 +20,9 @@ import type {
   ActionItemStatus,
   CompanyDelegate,
   CompanyDelegateRequest,
+  VisualPoint,
+  VisualRequest,
+  VisualSpec,
 } from "./types";
 
 const OPENAI_BASE_URL = "https://api.openai.com/v1";
@@ -74,6 +77,7 @@ export class TalonCompanyDelegate implements CompanyDelegate {
   private readonly askOp: (request: CompanyDelegateRequest) => Promise<string>;
   private readonly actionItemsOp: (request: ActionItemsRequest) => Promise<ActionItem[]>;
   private readonly matchActionItemOp: (request: ActionItemMatchRequest) => Promise<string | null>;
+  private readonly buildVisualOp: (request: VisualRequest) => Promise<VisualSpec>;
   private weaveInitPromise?: Promise<boolean>;
   private initPromise?: Promise<TalonRuntime>;
 
@@ -109,6 +113,10 @@ export class TalonCompanyDelegate implements CompanyDelegate {
     this.matchActionItemOp = weave.op(this, this.matchActionItemRuntime, {
       name: "alfred.talon.matchActionItem",
       summarize: matchedId => ({ matchedId }),
+    });
+    this.buildVisualOp = weave.op(this, this.buildVisualRuntime, {
+      name: "alfred.talon.buildVisual",
+      summarize: spec => ({ kind: spec.kind, title: "title" in spec ? spec.title : undefined }),
     });
   }
 
@@ -319,6 +327,76 @@ export class TalonCompanyDelegate implements CompanyDelegate {
         "Talon action-item match timed out.",
       );
       return parseActionItemMatch(answer, request.items);
+    } finally {
+      streamController.abort();
+      void answerPromise?.catch(() => undefined);
+    }
+  }
+
+  async buildVisual(request: VisualRequest): Promise<VisualSpec> {
+    if (!request.question.trim()) {
+      return { kind: "text", text: "No request was provided to visualize." };
+    }
+    await this.ensureWeave();
+    return this.buildVisualOp(request);
+  }
+
+  private async buildVisualRuntime(request: VisualRequest): Promise<VisualSpec> {
+    const runtime = await this.ensureRuntime();
+    const channel = await this.channelForMeeting(runtime, {
+      meetingId: request.meetingId,
+      speaker: { id: "alfred", displayName: "Alfred" },
+      question: "",
+    });
+    const requestId = crypto.randomUUID();
+    const streamController = new AbortController();
+    let answerPromise: Promise<string> | undefined;
+
+    try {
+      const response = await runtime.client.postChannelMessage(
+        new gateway.PostChannelMessageRequest({
+          ns: this.options.namespace,
+          channel,
+          authorKind: "user",
+          author: "Alfred",
+          content: visualBuildPrompt(request.question),
+          subscriptionNames: [CHANNEL_REPLY_SUBSCRIPTION],
+          labels: {
+            requestId,
+            meetingId: request.meetingId,
+            kind: "build-visual",
+          },
+        }),
+      );
+      const routed = response.routedSessions.find(
+        session => session.subscription === CHANNEL_REPLY_SUBSCRIPTION,
+      );
+      if (!routed || routed.error || !routed.sessionId) {
+        throw new Error(
+          routed?.error || "Talon channel did not route the visual build to the delegate.",
+        );
+      }
+      console.log(
+        `[agent] Talon build-visual routed request=${requestId} channel=${channel} session=${routed.sessionId}`,
+      );
+
+      answerPromise = collectTalonAnswer(
+        runtime.client.streamSessionParts(
+          new gateway.StreamSessionPartsRequest({
+            ns: this.options.namespace,
+            agent: this.options.agentName,
+            sessionId: routed.sessionId,
+          }),
+          { signal: streamController.signal, timeoutMs: 0 },
+        ),
+      );
+
+      const answer = await withTimeout(
+        answerPromise,
+        this.options.timeoutMs,
+        "Talon visual build timed out.",
+      );
+      return parseVisualSpec(answer);
     } finally {
       streamController.abort();
       void answerPromise?.catch(() => undefined);
@@ -895,6 +973,160 @@ function parseActionItemMatch(
   }
   const match = items.find(item => normalized.includes(item.id.toLowerCase()));
   return match ? match.id : null;
+}
+
+function visualBuildPrompt(question: string): string {
+  return [
+    "A meeting participant asked Alfred to pull up / show / visualize some company data.",
+    `Request: "${question}"`,
+    "",
+    "First, retrieve the relevant numbers from company memory using the available tools.",
+    "For quarterly finances, call the company_finance tool to get exact figures; otherwise use",
+    "company_memory_search / company_memory_get. Do not invent numbers — only use tool results.",
+    "",
+    "Then decide the single representation that best communicates the answer and output it as JSON.",
+    "Choose the kind that fits the data:",
+    '- "pie": parts of a whole (e.g. revenue split by category for one period).',
+    '- "bar": comparing a metric across a few labels (e.g. revenue by quarter).',
+    '- "line": a trend over an ordered sequence (e.g. net income over quarters).',
+    '- "table": multiple columns of values that do not chart cleanly.',
+    '- "text": a short factual answer with no useful chart.',
+    "",
+    "Respond with ONLY a JSON object (no prose, no markdown fences) matching exactly one of:",
+    '{"kind":"pie"|"bar"|"line","title":string,"subtitle"?:string,"unit"?:string,"series":[{"label":string,"value":number}]}',
+    '{"kind":"table","title":string,"subtitle"?:string,"columns":string[],"rows":(string|number)[][]}',
+    '{"kind":"text","title"?:string,"text":string}',
+    "",
+    "Rules: numeric values must be plain numbers (no commas, currency symbols, or units in the number).",
+    'Put any currency/unit hint in "unit" (e.g. "$"). Keep the title short. Prefer 2-8 data points.',
+  ].join("\n");
+}
+
+// Pulls the first balanced JSON object out of the model output (it may wrap the
+// object in prose or markdown fences).
+function extractJsonObject(value: string): string | undefined {
+  const start = value.indexOf("{");
+  if (start === -1) return undefined;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = start; index < value.length; index += 1) {
+    const char = value[index];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') inString = true;
+    else if (char === "{") depth += 1;
+    else if (char === "}") {
+      depth -= 1;
+      if (depth === 0) return value.slice(start, index + 1);
+    }
+  }
+  return undefined;
+}
+
+function parseVisualSpec(answer: string): VisualSpec {
+  const json = extractJsonObject(answer);
+  const fallback: VisualSpec = {
+    kind: "text",
+    text: answer.trim() || "Alfred could not build a visual for that request.",
+  };
+  if (!json) return fallback;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    return fallback;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return fallback;
+  const record = parsed as Record<string, unknown>;
+  const kind = record.kind;
+
+  if (kind === "pie" || kind === "bar" || kind === "line") {
+    const series = parseVisualSeries(record.series);
+    if (series.length === 0) return fallback;
+    return {
+      kind,
+      title: readSpecString(record.title) || "Untitled",
+      subtitle: optionalSpecString(record.subtitle),
+      unit: optionalSpecString(record.unit),
+      series,
+    };
+  }
+
+  if (kind === "table") {
+    const columns = Array.isArray(record.columns)
+      ? record.columns.filter((value): value is string => typeof value === "string")
+      : [];
+    const rows = parseVisualRows(record.rows);
+    if (columns.length === 0 || rows.length === 0) return fallback;
+    return {
+      kind: "table",
+      title: readSpecString(record.title) || "Untitled",
+      subtitle: optionalSpecString(record.subtitle),
+      columns,
+      rows,
+    };
+  }
+
+  if (kind === "text") {
+    const text = readSpecString(record.text);
+    if (!text) return fallback;
+    return { kind: "text", title: optionalSpecString(record.title), text };
+  }
+
+  return fallback;
+}
+
+function parseVisualSeries(value: unknown): VisualPoint[] {
+  if (!Array.isArray(value)) return [];
+  const points: VisualPoint[] = [];
+  for (const entry of value) {
+    if (!entry || typeof entry !== "object") continue;
+    const record = entry as Record<string, unknown>;
+    const label = typeof record.label === "string" ? record.label.trim() : "";
+    const numeric = coerceNumber(record.value);
+    if (!label || numeric === undefined) continue;
+    points.push({ label, value: numeric });
+  }
+  return points;
+}
+
+function parseVisualRows(value: unknown): Array<Array<string | number>> {
+  if (!Array.isArray(value)) return [];
+  const rows: Array<Array<string | number>> = [];
+  for (const entry of value) {
+    if (!Array.isArray(entry)) continue;
+    const cells = entry.map(cell => {
+      if (typeof cell === "number" && Number.isFinite(cell)) return cell;
+      if (typeof cell === "string") return cell;
+      return String(cell ?? "");
+    });
+    rows.push(cells);
+  }
+  return rows;
+}
+
+function coerceNumber(value: unknown): number | undefined {
+  if (typeof value === "number") return Number.isFinite(value) ? value : undefined;
+  if (typeof value === "string") {
+    const cleaned = Number.parseFloat(value.replace(/[,$%\s]/g, ""));
+    return Number.isFinite(cleaned) ? cleaned : undefined;
+  }
+  return undefined;
+}
+
+function readSpecString(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function optionalSpecString(value: unknown): string | undefined {
+  const text = readSpecString(value);
+  return text || undefined;
 }
 
 function routedDelegateQuestion(question: string): string {

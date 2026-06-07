@@ -50,6 +50,13 @@ export interface OpenAIRealtimeVoiceOptions {
     status: string;
     title?: string;
   }>;
+  /**
+   * Show Alfred-decided generative UI (chart/table) on the screenshare for a
+   * free-form request. Delegated: the visual is built by Talon (`buildVisual`)
+   * via the agui CopilotKit bridge; ctl only triggers the run. The spoken answer
+   * still flows through the Realtime voice path.
+   */
+  onRenderVisual(input: { question: string }): void | Promise<void>;
 }
 
 /** A chat event ctl forwards to the agui screenshare chat view. */
@@ -128,6 +135,7 @@ export class OpenAIRealtimeVoice {
   private readonly onCreateActionItems: () => Promise<{ count: number }>;
   private readonly onAddActionItem: OpenAIRealtimeVoiceOptions["onAddActionItem"];
   private readonly onRemoveActionItem: OpenAIRealtimeVoiceOptions["onRemoveActionItem"];
+  private readonly onRenderVisual: OpenAIRealtimeVoiceOptions["onRenderVisual"];
   private readonly queuedAudio: string[] = [];
   private socket?: WebSocket;
   private state: ConnectionState = "idle";
@@ -190,6 +198,7 @@ export class OpenAIRealtimeVoice {
     this.onCreateActionItems = options.onCreateActionItems;
     this.onAddActionItem = options.onAddActionItem;
     this.onRemoveActionItem = options.onRemoveActionItem;
+    this.onRenderVisual = options.onRenderVisual;
   }
 
   get enabled(): boolean {
@@ -395,6 +404,24 @@ export class OpenAIRealtimeVoice {
                 },
               },
               required: ["title"],
+              additionalProperties: false,
+            },
+          },
+          {
+            type: "function",
+            name: "render_visual",
+            description:
+              "Show Alfred-decided generative UI (a chart, graph, or table) on the shared screen. Call when a participant asks Alfred to pull up, show, display, visualize, graph, or chart company data — e.g. quarterly finances, revenue breakdown, or trends. Alfred picks the best representation; you only provide the request.",
+            parameters: {
+              type: "object",
+              properties: {
+                question: {
+                  type: "string",
+                  description:
+                    "A concise standalone description of what to visualize, e.g. \"last quarter's revenue by category\".",
+                },
+              },
+              required: ["question"],
               additionalProperties: false,
             },
           },
@@ -771,6 +798,26 @@ export class OpenAIRealtimeVoice {
         }
         return await this.onRemoveActionItem({ title });
       }
+      case "render_visual": {
+        const args = parseFunctionArgs(item.arguments);
+        const question = typeof args.question === "string" ? args.question.trim() : "";
+        if (!question) {
+          return { status: "failed", error: "Describe what to visualize." };
+        }
+        console.log(`[ctl] realtime render_visual: ${truncateForLog(question, 240)}`);
+        // Unlike the delegate path, a visualization is the answer: the chart renders
+        // itself via the CopilotKit agui run below. Deliberately emit NO chat bubbles
+        // (no user text, no Alfred waveform) so the screenshare shows only the chart.
+        try {
+          await this.onRenderVisual({ question });
+          return { status: "rendering" };
+        } catch (error) {
+          return {
+            status: "failed",
+            error: error instanceof Error ? error.message : String(error),
+          };
+        }
+      }
       default:
         return {
           status: "ignored",
@@ -932,6 +979,9 @@ When the user asks Alfred to share the screen, show the screen, present, or star
 
 # Action items
 When the user asks Alfred to create, generate, or summarize action items, to-dos, follow-ups, or next steps, call create_action_items, then confirm briefly how many were captured. To add one specific item, call add_action_item with a concise title and an assignee if one was stated. To remove one, call remove_action_item with the title or a short description of the item. After an add or remove, confirm briefly; if a remove returns not_found, say you could not find a matching item.
+
+# Visuals
+When the user asks Alfred to show, pull up, display, visualize, graph, report, or chart company data (for example quarterly finances or a revenue breakdown), call render_visual with a concise description of what to visualize, and call ONLY render_visual — do not also call delegate_to_company_agent for the same request. Alfred picks the best chart and it renders on the shared screen. The chart is the answer: after the tool returns, stay silent or say at most one very brief sentence; do not read the numbers aloud.
 
 # Voice Style
 Be concise, natural, and direct. Speak at a brisk conversational pace, not slowly. Answer in one sentence by default, two only when necessary. Do not add filler, throat-clearing, long acknowledgements, or tool-use preambles.

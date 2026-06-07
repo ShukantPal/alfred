@@ -3,6 +3,7 @@
 import { AlfredLanding } from "@/components/AlfredLanding";
 import { ChatMode } from "@/components/ChatMode";
 import { useMeetingChat } from "@/components/ChatProvider";
+import { useVisualAgent } from "@/components/VisualAgentProvider";
 import { DEFAULT_APP_ID, type AppTab } from "@/lib/apps";
 
 interface AppWorkspaceProps {
@@ -11,7 +12,10 @@ interface AppWorkspaceProps {
 
 export function AppWorkspace({ app }: AppWorkspaceProps) {
   const isAlfredHome = app.id === DEFAULT_APP_ID;
-  const { mode } = useMeetingChat();
+  const { mode: chatMode } = useMeetingChat();
+  const { visuals } = useVisualAgent();
+  // Flip to chat once there's any conversation or any Alfred-chosen visual.
+  const mode = chatMode === "chat" || visuals.length > 0 ? "chat" : "landing";
 
   return (
     <main className="app-workspace" data-app={app.id}>
