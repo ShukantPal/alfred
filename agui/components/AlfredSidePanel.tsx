@@ -10,8 +10,8 @@ import type { PanelTarget } from "@/lib/panel";
 // window). Below them, one row per supported integration lights up when Alfred
 // actually uses it. All highlights reset on the next user prompt (a `clear` signal).
 //
-// The MeetingNotesPanel / TasksPanel components are intentionally kept in the repo
-// (not deleted) — surfacing their content in the chat window is a follow-up PR.
+// Meeting-note content is generated on demand from ctl's retained transcript and
+// rendered in the chat pane; this panel only signals that Alfred touched it.
 
 interface ArtifactRow {
   target: Extract<PanelTarget, "notes" | "tasks">;

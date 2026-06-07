@@ -18,8 +18,8 @@ export default function Page() {
           <h1>Alfred</h1>
           <p className="subtitle">Live meeting participant — operator console</p>
           <p className="hint">
-            The left panel shows live meeting notes and action items. Open the
-            chat on the right to ask Alfred about them.
+            The left panel shows what Alfred can surface. Ask Alfred in the meeting
+            to show notes, action items, or company context in the shared chat.
           </p>
         </main>
 

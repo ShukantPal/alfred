@@ -20,6 +20,7 @@ import type {
   ActionItemStatus,
   CompanyDelegate,
   CompanyDelegateRequest,
+  MeetingNotesRequest,
   ToolUseListener,
   VisualPoint,
   VisualRequest,
@@ -82,6 +83,7 @@ export class TalonCompanyDelegate implements CompanyDelegate {
   private readonly startRuntimeOp: () => Promise<TalonRuntime>;
   private readonly bootstrapOp: (runtime: TalonRuntime) => Promise<void>;
   private readonly askOp: (request: CompanyDelegateRequest) => Promise<string>;
+  private readonly meetingNotesOp: (request: MeetingNotesRequest) => Promise<string[]>;
   private readonly actionItemsOp: (request: ActionItemsRequest) => Promise<ActionItem[]>;
   private readonly matchActionItemOp: (request: ActionItemMatchRequest) => Promise<string | null>;
   private readonly buildVisualOp: (request: VisualRequest) => Promise<VisualSpec>;
@@ -112,6 +114,10 @@ export class TalonCompanyDelegate implements CompanyDelegate {
     this.askOp = weave.op(this, this.askRuntime, {
       name: "alfred.talon.ask",
       summarize: answer => ({ answerChars: answer.length }),
+    });
+    this.meetingNotesOp = weave.op(this, this.meetingNotesRuntime, {
+      name: "alfred.talon.meetingNotes",
+      summarize: notes => ({ noteCount: notes.length }),
     });
     this.actionItemsOp = weave.op(this, this.actionItemsRuntime, {
       name: "alfred.talon.actionItems",
@@ -199,6 +205,75 @@ export class TalonCompanyDelegate implements CompanyDelegate {
         "Talon company agent timed out.",
       );
       return answer.trim() || "The Talon company agent returned no answer.";
+    } finally {
+      streamController.abort();
+      void answerPromise?.catch(() => undefined);
+    }
+  }
+
+  async updateMeetingNotes(request: MeetingNotesRequest): Promise<string[]> {
+    if (!request.transcript.trim()) return [];
+    await this.ensureWeave();
+    return this.meetingNotesOp(request);
+  }
+
+  private async meetingNotesRuntime(request: MeetingNotesRequest): Promise<string[]> {
+    const runtime = await this.ensureRuntime();
+    const channel = await this.channelForMeeting(runtime, {
+      meetingId: request.meetingId,
+      speaker: { id: "alfred", displayName: "Alfred" },
+      question: "",
+    });
+    const requestId = crypto.randomUUID();
+    const streamController = new AbortController();
+    let answerPromise: Promise<string> | undefined;
+
+    try {
+      const response = await runtime.client.postChannelMessage(
+        new gateway.PostChannelMessageRequest({
+          ns: this.options.namespace,
+          channel,
+          authorKind: "user",
+          author: "Alfred",
+          content: meetingNotesUpdatePrompt(request),
+          subscriptionNames: [CHANNEL_REPLY_SUBSCRIPTION],
+          labels: {
+            requestId,
+            meetingId: request.meetingId,
+            kind: "meeting-notes",
+          },
+        }),
+      );
+      const routed = response.routedSessions.find(
+        session => session.subscription === CHANNEL_REPLY_SUBSCRIPTION,
+      );
+      if (!routed || routed.error || !routed.sessionId) {
+        throw new Error(
+          routed?.error || "Talon channel did not route meeting-note update to the delegate.",
+        );
+      }
+      console.log(
+        `[agent] Talon meeting notes routed request=${requestId} channel=${channel} session=${routed.sessionId}`,
+      );
+
+      answerPromise = collectTalonAnswer(
+        runtime.client.streamSessionParts(
+          new gateway.StreamSessionPartsRequest({
+            ns: this.options.namespace,
+            agent: this.options.agentName,
+            sessionId: routed.sessionId,
+          }),
+          { signal: streamController.signal, timeoutMs: 0 },
+        ),
+        this.toolUseCollector(request.meetingId),
+      );
+
+      const answer = await withTimeout(
+        answerPromise,
+        this.options.timeoutMs,
+        "Talon meeting-note update timed out.",
+      );
+      return parseMeetingNotes(answer);
     } finally {
       streamController.abort();
       void answerPromise?.catch(() => undefined);
@@ -953,6 +1028,60 @@ Never send emails, Slack messages, GitHub comments, GitHub reviews, edit documen
 When this session is triggered by a Talon channel, still write the final concise answer as normal assistant text. Alfred reads the routed session output directly. If channel_publish is available, do not rely on it as the only answer.
 
 Return a concise, grounded answer for the voice model to speak. Include the relevant source or owner when available. If context is missing, say so plainly.`;
+}
+
+function meetingNotesUpdatePrompt(request: MeetingNotesRequest): string {
+  return [
+    "You are maintaining Alfred's meeting notes.",
+    "The notes are shown only when a participant asks for them. Read the full transcript and",
+    "produce a useful recap as concise bullets.",
+    "",
+    "Rules:",
+    "- Prefer 4-10 bullets when the transcript has enough substance.",
+    "- A bullet does not need to be a final decision: include useful context, progress updates, open questions, options discussed, risks, concerns, assumptions, follow-ups mentioned in passing, and noteworthy rationale.",
+    "- Merge repetitive chatter, but err on the side of capturing a useful point if it would help someone catch up later.",
+    "- Do not create a bullet for the request to Alfred to show, generate, summarize, recap, or update meeting notes; that request is a control utterance, not meeting content.",
+    "- Skip pure small talk, filler, transcription artifacts, and unsupported inferences.",
+    "- Include speaker names only when ownership, stance, or source matters.",
+    "",
+    "Full transcript:",
+    request.transcript,
+    "",
+    "Respond with ONLY a JSON array of strings, where each string is one bullet without a leading dash.",
+  ].join("\n");
+}
+
+function parseMeetingNotes(answer: string): string[] {
+  const json = extractJsonArray(answer);
+  if (!json) return [];
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+
+  return normalizeMeetingNotes(parsed);
+}
+
+function normalizeMeetingNotes(values: unknown[]): string[] {
+  const notes: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    if (typeof value !== "string") continue;
+    const note = value
+      .trim()
+      .replace(/^[-*\u2022]\s*/, "")
+      .replace(/\s+/g, " ");
+    if (!note) continue;
+    const key = note.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    notes.push(note);
+  }
+  return notes.slice(0, 10);
 }
 
 function actionItemsExtractionPrompt(transcript: string): string {

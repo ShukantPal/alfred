@@ -1,9 +1,9 @@
 import type { ChatMessage, ChatRole, ChatKind, ChatStatus } from "@/lib/chat";
 
 // In-process chat buffer for the screenshare "chat mode". ctl POSTs question/answer
-// events here as the delegate path runs; the screenshare ChatWatcher polls (and
+// events here as delegated paths run; the screenshare ChatWatcher polls (and
 // receives /ws/notes pushes) to render bubbles. Lives in process memory alongside
-// the transcript and tasks buffers (transcriptHub.ts / tasksHub.ts).
+// the tasks buffer.
 interface Entry {
   seq: number;
   message: ChatMessage;

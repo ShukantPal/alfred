@@ -21,6 +21,12 @@ export interface ActionItemsRequest {
   transcript: string;
 }
 
+export interface MeetingNotesRequest {
+  meetingId: string;
+  /** The full meeting transcript, formatted as "Speaker: text" lines. */
+  transcript: string;
+}
+
 export interface ActionItemMatch {
   id: string;
   title: string;
@@ -97,6 +103,8 @@ export type ToolUseListener = (event: ToolUseEvent) => void;
 
 export interface CompanyDelegate {
   ask(request: CompanyDelegateRequest): Promise<string>;
+  /** Update meeting-note bullets from the full transcript and previous bullets. */
+  updateMeetingNotes(request: MeetingNotesRequest): Promise<string[]>;
   /**
    * Transform a full meeting transcript into structured action items. Runs as a
    * Weave-instrumented subagent node so it shows in the delegation tree.

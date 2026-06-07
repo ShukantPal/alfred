@@ -6,9 +6,7 @@ import { AlfredSidePanel } from "@/components/AlfredSidePanel";
 import { AppWorkspace } from "@/components/AppWorkspace";
 import { ChatProvider } from "@/components/ChatProvider";
 import { ChatWatcher } from "@/components/ChatWatcher";
-import { MeetingNotesProvider } from "@/components/MeetingNotesProvider";
 import { PanelSignalProvider } from "@/components/PanelSignalProvider";
-import { MeetingNotesWatcher } from "@/components/MeetingNotesWatcher";
 import { VisualAgentProvider } from "@/components/VisualAgentProvider";
 import { VisualDevConsole } from "@/components/VisualDevConsole";
 import { DEFAULT_APP_ID, documentTitleForApp, getAppTab } from "@/lib/apps";
@@ -28,25 +26,22 @@ export default function ScreensharePage() {
 
   return (
     <CopilotKit runtimeUrl="/api/copilotkit" useSingleEndpoint={false}>
-      <MeetingNotesProvider>
-        <MeetingNotesWatcher />
-        <ChatProvider>
-          <PanelSignalProvider>
-            <VisualAgentProvider>
-              <ChatWatcher />
-              <div className="screenshare-shell">
-                <div className="screenshare-body">
-                  <AlfredSidePanel />
-                  <div className="screenshare-main">
-                    <AppWorkspace app={activeApp} />
-                  </div>
+      <ChatProvider>
+        <PanelSignalProvider>
+          <VisualAgentProvider>
+            <ChatWatcher />
+            <div className="screenshare-shell">
+              <div className="screenshare-body">
+                <AlfredSidePanel />
+                <div className="screenshare-main">
+                  <AppWorkspace app={activeApp} />
                 </div>
               </div>
-              <VisualDevConsole />
-            </VisualAgentProvider>
-          </PanelSignalProvider>
-        </ChatProvider>
-      </MeetingNotesProvider>
+            </div>
+            <VisualDevConsole />
+          </VisualAgentProvider>
+        </PanelSignalProvider>
+      </ChatProvider>
     </CopilotKit>
   );
 }

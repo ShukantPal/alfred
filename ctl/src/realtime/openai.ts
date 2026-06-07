@@ -23,7 +23,7 @@ export interface OpenAIRealtimeVoiceOptions {
   speaker: CompanyDelegateRequest["speaker"];
   delegate: CompanyDelegate;
   onStatus(message: string): void;
-  /** Every final input transcript (live meeting speech), for meeting-notes forwarding. */
+  /** Every final input transcript (live meeting speech), retained by ctl. */
   onUtterance?(utterance: MeetingUtterance): void;
   /**
    * Chat-mode events for the screenshare surface: the user's delegated question
@@ -44,19 +44,29 @@ export interface OpenAIRealtimeVoiceOptions {
   onAudioClear(): void;
   onStartScreenshare(): Promise<void> | void;
   /**
-   * Generate end-of-meeting action items from the retained transcript and push
-   * them to the screenshare surface. Returns a short summary for the voice model.
+   * Generate meeting notes from the retained transcript and return the bullets
+   * to display in the screenshare chat pane.
    */
-  onCreateActionItems(): Promise<{ count: number }>;
+  onShowMeetingNotes(): Promise<{ notes: string[]; updated: boolean }>;
+  /**
+   * Generate end-of-meeting action items from the retained transcript and push
+   * them to the screenshare chat pane. Returns items for chat rendering.
+   */
+  onCreateActionItems(): Promise<{
+    count: number;
+    items: ActionItemForChat[];
+  }>;
   /** Add a single action item to the screenshare list (voice "add" command). */
   onAddActionItem(input: { title: string; assignee?: string }): Promise<{
     status: string;
     title?: string;
+    items: ActionItemForChat[];
   }>;
   /** Remove the action item matching the description (voice "remove" command). */
   onRemoveActionItem(input: { title: string }): Promise<{
     status: string;
     title?: string;
+    items: ActionItemForChat[];
   }>;
   /**
    * Show Alfred-decided generative UI (chart/table) on the screenshare for a
@@ -65,6 +75,13 @@ export interface OpenAIRealtimeVoiceOptions {
    * still flows through the Realtime voice path.
    */
   onRenderVisual(input: { question: string; afterTs?: number }): void | Promise<void>;
+}
+
+/** Minimal action-item shape for screenshare chat rendering. */
+export interface ActionItemForChat {
+  title: string;
+  assignee: string;
+  status?: "open" | "done";
 }
 
 /** A chat event ctl forwards to the agui screenshare chat view. */
@@ -143,7 +160,11 @@ export class OpenAIRealtimeVoice {
   private readonly onAudioEnd: (id: string) => void;
   private readonly onAudioClear: () => void;
   private readonly onStartScreenshare: () => Promise<void> | void;
-  private readonly onCreateActionItems: () => Promise<{ count: number }>;
+  private readonly onShowMeetingNotes: OpenAIRealtimeVoiceOptions["onShowMeetingNotes"];
+  private readonly onCreateActionItems: () => Promise<{
+    count: number;
+    items: ActionItemForChat[];
+  }>;
   private readonly onAddActionItem: OpenAIRealtimeVoiceOptions["onAddActionItem"];
   private readonly onRemoveActionItem: OpenAIRealtimeVoiceOptions["onRemoveActionItem"];
   private readonly onRenderVisual: OpenAIRealtimeVoiceOptions["onRenderVisual"];
@@ -207,6 +228,7 @@ export class OpenAIRealtimeVoice {
     this.onAudioEnd = options.onAudioEnd;
     this.onAudioClear = options.onAudioClear;
     this.onStartScreenshare = options.onStartScreenshare;
+    this.onShowMeetingNotes = options.onShowMeetingNotes;
     this.onCreateActionItems = options.onCreateActionItems;
     this.onAddActionItem = options.onAddActionItem;
     this.onRemoveActionItem = options.onRemoveActionItem;
@@ -406,6 +428,17 @@ export class OpenAIRealtimeVoice {
           },
           {
             type: "function",
+            name: "show_meeting_notes",
+            description:
+              "Generate or refresh Alfred's summarized meeting-note bullets from the meeting transcript and show them in the shared chat pane. Call when a participant asks to see, show, summarize, recap, or update meeting notes.",
+            parameters: {
+              type: "object",
+              properties: {},
+              additionalProperties: false,
+            },
+          },
+          {
+            type: "function",
             name: "add_action_item",
             description:
               "Add a single action item to the shared action-items list. Call when a participant asks Alfred to add, create, or note one specific to-do, task, or follow-up.",
@@ -539,7 +572,8 @@ export class OpenAIRealtimeVoice {
     console.log(`[ctl] realtime transcript: ${transcript}`);
     this.onStatus(`heard: ${transcript}`);
 
-    // Forward all meeting speech (not just wake-word turns) for live meeting notes.
+    // Forward all meeting speech (not just wake-word turns) so ctl can build
+    // transcript-derived features such as meeting notes and action items.
     this.onUtterance?.({
       text: transcript,
       speaker: this.speaker.displayName,
@@ -795,17 +829,83 @@ export class OpenAIRealtimeVoice {
             error: error instanceof Error ? error.message : String(error),
           };
         }
-      case "create_action_items":
+      case "show_meeting_notes": {
+        console.log("[ctl] realtime show_meeting_notes");
+        const turnTs = Date.now();
+        this.onChatMessage?.({
+          op: "add",
+          id: crypto.randomUUID(),
+          role: "user",
+          kind: "text",
+          text: this.lastUserTranscript || "Show meeting notes",
+          ts: turnTs,
+        });
+        this.onPanelSignal?.({ op: "highlight", target: "notes" });
         try {
-          const { count } = await this.onCreateActionItems();
-          console.log(`[ctl] realtime create_action_items produced ${count} items`);
-          return { status: "created", count };
+          const { notes, updated } = await this.onShowMeetingNotes();
+          this.onChatMessage?.({
+            op: "add",
+            id: crypto.randomUUID(),
+            role: "alfred",
+            kind: "text",
+            text: formatMeetingNotesForChat(notes),
+            ts: turnTs + 1,
+          });
+          return { status: "shown", count: notes.length, updated };
         } catch (error) {
+          this.onChatMessage?.({
+            op: "add",
+            id: crypto.randomUUID(),
+            role: "alfred",
+            kind: "text",
+            text: "I couldn't generate meeting notes from the transcript.",
+            ts: turnTs + 1,
+          });
           return {
             status: "failed",
             error: error instanceof Error ? error.message : String(error),
           };
         }
+      }
+      case "create_action_items": {
+        console.log("[ctl] realtime create_action_items");
+        const turnTs = Date.now();
+        this.onChatMessage?.({
+          op: "add",
+          id: crypto.randomUUID(),
+          role: "user",
+          kind: "text",
+          text: this.lastUserTranscript || "Create action items",
+          ts: turnTs,
+        });
+        this.onPanelSignal?.({ op: "highlight", target: "tasks" });
+        try {
+          const { count, items } = await this.onCreateActionItems();
+          console.log(`[ctl] realtime create_action_items produced ${count} items`);
+          this.onChatMessage?.({
+            op: "add",
+            id: crypto.randomUUID(),
+            role: "alfred",
+            kind: "text",
+            text: formatActionItemsForChat(items),
+            ts: turnTs + 1,
+          });
+          return { status: "created", count };
+        } catch (error) {
+          this.onChatMessage?.({
+            op: "add",
+            id: crypto.randomUUID(),
+            role: "alfred",
+            kind: "text",
+            text: "I couldn't generate action items from the transcript.",
+            ts: turnTs + 1,
+          });
+          return {
+            status: "failed",
+            error: error instanceof Error ? error.message : String(error),
+          };
+        }
+      }
       case "add_action_item": {
         const args = parseFunctionArgs(item.arguments);
         const title = typeof args.title === "string" ? args.title.trim() : "";
@@ -814,7 +914,29 @@ export class OpenAIRealtimeVoice {
           typeof args.assignee === "string" && args.assignee.trim()
             ? args.assignee.trim()
             : undefined;
-        return await this.onAddActionItem({ title, assignee });
+        const turnTs = Date.now();
+        this.onChatMessage?.({
+          op: "add",
+          id: crypto.randomUUID(),
+          role: "user",
+          kind: "text",
+          text: this.lastUserTranscript || `Add action item: ${title}`,
+          ts: turnTs,
+        });
+        this.onPanelSignal?.({ op: "highlight", target: "tasks" });
+        const result = await this.onAddActionItem({ title, assignee });
+        this.onChatMessage?.({
+          op: "add",
+          id: crypto.randomUUID(),
+          role: "alfred",
+          kind: "text",
+          text:
+            result.status === "added"
+              ? formatActionItemsForChat(result.items)
+              : "I couldn't add that action item.",
+          ts: turnTs + 1,
+        });
+        return result;
       }
       case "remove_action_item": {
         const args = parseFunctionArgs(item.arguments);
@@ -822,7 +944,31 @@ export class OpenAIRealtimeVoice {
         if (!title) {
           return { status: "failed", error: "Specify which action item to remove." };
         }
-        return await this.onRemoveActionItem({ title });
+        const turnTs = Date.now();
+        this.onChatMessage?.({
+          op: "add",
+          id: crypto.randomUUID(),
+          role: "user",
+          kind: "text",
+          text: this.lastUserTranscript || `Remove action item: ${title}`,
+          ts: turnTs,
+        });
+        this.onPanelSignal?.({ op: "highlight", target: "tasks" });
+        const result = await this.onRemoveActionItem({ title });
+        this.onChatMessage?.({
+          op: "add",
+          id: crypto.randomUUID(),
+          role: "alfred",
+          kind: "text",
+          text:
+            result.status === "removed"
+              ? formatActionItemsForChat(result.items)
+              : result.status === "not_found"
+                ? "I couldn't find a matching action item to remove."
+                : "I couldn't remove that action item.",
+          ts: turnTs + 1,
+        });
+        return result;
       }
       case "render_visual": {
         const args = parseFunctionArgs(item.arguments);
@@ -1025,8 +1171,11 @@ Call delegate_to_company_agent for non-quantitative factual questions: colleague
 # Screenshare
 When the user asks Alfred to share the screen, show the screen, present, or start screenshare, call start_screenshare. Confirm briefly after the tool returns.
 
+# Meeting notes
+When the user asks to see meeting notes, summarize the meeting, recap what has happened, or update notes, call show_meeting_notes. The notes render in the shared chat pane. After the tool returns, confirm briefly how many bullets are shown.
+
 # Action items
-When the user asks Alfred to create, generate, or summarize action items, to-dos, follow-ups, or next steps, call create_action_items, then confirm briefly how many were captured. To add one specific item, call add_action_item with a concise title and an assignee if one was stated. To remove one, call remove_action_item with the title or a short description of the item. After an add or remove, confirm briefly; if a remove returns not_found, say you could not find a matching item.
+When the user asks Alfred to create, generate, or summarize action items, to-dos, follow-ups, or next steps, call create_action_items. The items render in the shared chat pane. After the tool returns, confirm briefly how many were captured. To add one specific item, call add_action_item with a concise title and an assignee if one was stated. To remove one, call remove_action_item with the title or a short description of the item. After an add or remove, confirm briefly; if a remove returns not_found, say you could not find a matching item.
 
 # Voice Style
 Be concise, natural, and direct. Speak at a brisk conversational pace, not slowly. Answer in one sentence by default, two only when necessary. Do not add filler, throat-clearing, long acknowledgements, or tool-use preambles.
@@ -1042,6 +1191,7 @@ function responseInstructions(reason: string, addressedText?: string): string {
 
   const base =
     "If the request is about company metrics, finances, trends, or numeric breakdowns, call render_visual (not delegate_to_company_agent). " +
+    "If the request asks for meeting notes or a meeting recap, call show_meeting_notes. " +
     "If it needs other internal company context or current public information, call delegate_to_company_agent. " +
     "Call the chosen tool silently and do not produce spoken content before the tool result. Otherwise answer concisely by voice.";
   const addressed = addressedText?.trim();
@@ -1049,6 +1199,26 @@ function responseInstructions(reason: string, addressedText?: string): string {
     return `The user just addressed you with: "${addressed}". Respond only to this latest addressed request; do not answer earlier questions that were not addressed to you. If it contains no actual request, briefly ask how you can help. ${base}`;
   }
   return base;
+}
+
+function formatMeetingNotesForChat(notes: string[]): string {
+  if (notes.length === 0) {
+    return "Meeting notes\n\nNo substantive meeting notes yet.";
+  }
+  return `Meeting notes\n\n${notes.map(note => `- ${note}`).join("\n")}`;
+}
+
+function formatActionItemsForChat(items: ActionItemForChat[]): string {
+  if (items.length === 0) {
+    return "Action items\n\nNo action items yet.";
+  }
+  return `Action items\n\n${items
+    .map(item => {
+      const assignee = item.assignee.trim() ? ` (${item.assignee})` : "";
+      const done = item.status === "done" ? " ✓" : "";
+      return `- ${item.title}${assignee}${done}`;
+    })
+    .join("\n")}`;
 }
 
 function parseRealtimeEvent(data: unknown): RealtimeEvent | undefined {

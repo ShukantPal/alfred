@@ -8,9 +8,8 @@ import { useMeetingChat } from "@/components/ChatProvider";
 import { usePanelSignals } from "@/components/PanelSignalProvider";
 import { useVisualAgent } from "@/components/VisualAgentProvider";
 
-// Safety-net poll interval; the /ws/notes WebSocket delivers events instantly and
-// this poll guarantees catch-up / gap recovery (and is the sole transport if the WS
-// can't connect). Same dual-transport model as MeetingNotesWatcher.
+// Safety-net poll interval; the /ws/notes WebSocket delivers chat events instantly
+// and this poll guarantees catch-up / gap recovery if the WS can't connect.
 const POLL_MS = 700;
 const WS_RETRY_MS = 3_000;
 
