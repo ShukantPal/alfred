@@ -27,7 +27,10 @@ import type {
 
 const OPENAI_BASE_URL = "https://api.openai.com/v1";
 const WANDB_INFERENCE_BASE_URL = "https://api.inference.wandb.ai/v1";
+const SLACK_MCP_URL = "https://mcp.slack.com/mcp";
+const GITHUB_MCP_URL = "https://api.githubcopilot.com/mcp/";
 const DEFAULT_MEMORY_MCP_SCRIPT = fileURLToPath(new URL("./memory-mcp.ts", import.meta.url));
+const DEFAULT_SLACK_MCP_SCRIPT = fileURLToPath(new URL("./slack-mcp.ts", import.meta.url));
 const REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const DEFAULT_GOOGLE_CLIENT_SECRET_PATH = fileURLToPath(
   new URL("../../client_secret.json", import.meta.url),
@@ -53,6 +56,8 @@ export interface TalonCompanyDelegateOptions {
   model: string;
   dataDir: string;
   workspaceDir: string;
+  grpcPort: number;
+  uiPort: number;
   jwtSecret: string;
   jwtTtlSeconds: number;
   weaveProject: string;
@@ -433,6 +438,8 @@ export class TalonCompanyDelegate implements CompanyDelegate {
     const server = await startTalon({
       jwtSecret: this.options.jwtSecret,
       config: talonConfig(this.options),
+      grpcPort: this.options.grpcPort,
+      uiPort: this.options.uiPort,
     });
 
     const transport = createGrpcTransport({
@@ -651,6 +658,10 @@ export function createTalonCompanyDelegateFromEnv(
   ];
   const workspaceMcp = buildWorkspaceMcpServer(env);
   if (workspaceMcp) mcpServers.push(workspaceMcp);
+  const slackMcp = buildSlackMcpServer(env);
+  if (slackMcp) mcpServers.push(slackMcp);
+  const githubMcp = buildGithubMcpServer(env);
+  if (githubMcp) mcpServers.push(githubMcp);
   const searchMcp = buildSearchMcpServer(env);
   if (searchMcp) mcpServers.push(searchMcp);
 
@@ -666,6 +677,8 @@ export function createTalonCompanyDelegateFromEnv(
       (providerKind === "wandb" ? "ibm-granite/granite-4.1-8b" : "gpt-4.1-mini"),
     dataDir: resolve(env.TALON_DATA_DIR ?? ".tools/talon/data"),
     workspaceDir: resolve(env.TALON_WORKSPACE_DIR ?? ".tools/talon/workspace"),
+    grpcPort: readInteger(env.TALON_GRPC_PORT, 53_100),
+    uiPort: readInteger(env.TALON_UI_PORT, 53_101),
     jwtSecret,
     jwtTtlSeconds: readInteger(env.TALON_JWT_TTL_SECONDS, 86_400),
     weaveProject: env.WEAVE_PROJECT ?? "meeting-agent",
@@ -878,13 +891,15 @@ function defaultTalonPrompt(): string {
 Tool routing:
 - For internal company questions, including company docs, Slack/project context, colleague notes, blockers, ship readiness, Priya, onboarding redesign, priorities, changes, or announcements, use company-memory first.
 - Use Google Workspace only for read-only retrieval from the user's real Drive, Docs, Gmail, or Calendar. Before calling a Google Workspace tool that needs a document/file id, get that id from a prior Google Workspace search/list/get result or from an explicit user-provided URL/id.
+- Use Slack only for real workspace Slack retrieval when the question asks for Slack messages, channels, users, threads, files, or decisions discussed in Slack. Prefer read/search tools. Do not send messages, create channels, add reactions, or modify canvases.
+- Use GitHub only for repository, issue, pull request, Actions, code, or security-advisory context. Prefer read-only repository/issue/PR retrieval. Do not create issues, branches, pull requests, comments, reviews, commits, or trigger workflows.
 - Use DuckDuckGo only for public web questions or current external facts. Do not use web search to answer private company-memory questions unless the user asks for public context.
 - For public questions involving latest, current, today, this week, news, markets, market close, stocks, or other time-sensitive facts, use DuckDuckGo before answering. Do not answer those from model memory.
 
-Never invent document ids, file ids, URLs, Slack links, calendar ids, or "latest" document names. If a needed id or document is not present in tool results, say the context is missing instead of guessing.
+Never invent document ids, file ids, URLs, Slack links, GitHub issue/PR numbers, commit SHAs, calendar ids, or "latest" document names. If a needed id or document is not present in tool results, say the context is missing instead of guessing.
 Never invent current public facts. If web search results are unavailable or insufficient, say you could not retrieve current public data.
 
-Never send emails, edit documents, change sharing, create files, create calendar events, or perform any other side effect.
+Never send emails, Slack messages, GitHub comments, GitHub reviews, edit documents, change sharing, create files, create calendar events, or perform any other side effect.
 
 When this session is triggered by a Talon channel, still write the final concise answer as normal assistant text. Alfred reads the routed session output directly. If channel_publish is available, do not rely on it as the only answer.
 
@@ -1249,6 +1264,93 @@ function buildSearchMcpServer(
   };
 }
 
+function buildSlackMcpServer(
+  env: Record<string, string | undefined>,
+): TalonMcpServerOptions | undefined {
+  const headers = readJsonObject(env.TALON_SLACK_MCP_HEADERS_JSON);
+  const authToken =
+    env.TALON_SLACK_MCP_AUTH_TOKEN?.trim() ||
+    env.TALON_SLACK_BOT_TOKEN?.trim() ||
+    env.SLACK_BOT_TOKEN?.trim();
+  if (authToken && !headers.Authorization) {
+    headers.Authorization = `Bearer ${authToken}`;
+  }
+  if (!readBoolean(env.TALON_SLACK_MCP_ENABLED, true)) return undefined;
+  if (!headers.Authorization) {
+    if (env.TALON_SLACK_MCP_ENABLED !== undefined) {
+      console.warn(
+        "[agent] skipping Slack MCP: set TALON_SLACK_MCP_AUTH_TOKEN or TALON_SLACK_MCP_HEADERS_JSON",
+      );
+    }
+    return undefined;
+  }
+  const target = env.TALON_SLACK_MCP_URL ?? SLACK_MCP_URL;
+  const bearerToken = readBearerToken(headers.Authorization);
+  if (target === SLACK_MCP_URL && bearerToken?.startsWith("xoxb-")) {
+    console.warn(
+      "[agent] using local Slack bot MCP: https://mcp.slack.com/mcp rejects xoxb bot tokens",
+    );
+    return {
+      name: env.TALON_SLACK_MCP_NAME ?? "slack",
+      transport: "stdio",
+      target: env.TALON_SLACK_BOT_MCP_COMMAND ?? process.execPath,
+      args: readStringArray(env.TALON_SLACK_BOT_MCP_ARGS_JSON, [DEFAULT_SLACK_MCP_SCRIPT]),
+      headers: {},
+    };
+  }
+
+  return {
+    name: env.TALON_SLACK_MCP_NAME ?? "slack",
+    transport: "http",
+    target,
+    args: [],
+    headers,
+  };
+}
+
+function buildGithubMcpServer(
+  env: Record<string, string | undefined>,
+): TalonMcpServerOptions | undefined {
+  const enabled = readBoolean(env.TALON_GITHUB_MCP_ENABLED, false);
+  if (!enabled) return undefined;
+
+  const headers = readJsonObject(env.TALON_GITHUB_MCP_HEADERS_JSON);
+  const authToken =
+    env.TALON_GITHUB_MCP_AUTH_TOKEN?.trim() ||
+    env.GITHUB_PERSONAL_ACCESS_TOKEN?.trim() ||
+    env.GITHUB_PAT?.trim();
+  if (authToken && !headers.Authorization) {
+    headers.Authorization = `Bearer ${authToken}`;
+  }
+  if (!headers.Authorization) {
+    console.warn(
+      "[agent] skipping GitHub MCP: set TALON_GITHUB_MCP_AUTH_TOKEN, GITHUB_PERSONAL_ACCESS_TOKEN, GITHUB_PAT, or TALON_GITHUB_MCP_HEADERS_JSON",
+    );
+    return undefined;
+  }
+
+  if (readBoolean(env.TALON_GITHUB_MCP_READ_ONLY, true) && !headers["X-MCP-Readonly"]) {
+    headers["X-MCP-Readonly"] = "true";
+  }
+  if (env.TALON_GITHUB_MCP_TOOLSETS?.trim() && !headers["X-MCP-Toolsets"]) {
+    headers["X-MCP-Toolsets"] = env.TALON_GITHUB_MCP_TOOLSETS.trim();
+  }
+  if (env.TALON_GITHUB_MCP_TOOLS?.trim() && !headers["X-MCP-Tools"]) {
+    headers["X-MCP-Tools"] = env.TALON_GITHUB_MCP_TOOLS.trim();
+  }
+  if (env.TALON_GITHUB_MCP_EXCLUDE_TOOLS?.trim() && !headers["X-MCP-Exclude-Tools"]) {
+    headers["X-MCP-Exclude-Tools"] = env.TALON_GITHUB_MCP_EXCLUDE_TOOLS.trim();
+  }
+
+  return {
+    name: env.TALON_GITHUB_MCP_NAME ?? "github",
+    transport: "http",
+    target: env.TALON_GITHUB_MCP_URL ?? GITHUB_MCP_URL,
+    args: [],
+    headers,
+  };
+}
+
 function resolveRepoPath(value: string | undefined, fallback: string): string {
   if (!value) return fallback;
   return value.startsWith("/") ? value : resolve(REPO_ROOT, value);
@@ -1285,6 +1387,11 @@ function readJsonObject(value: string | undefined): Record<string, string> {
   } catch {
     return {};
   }
+}
+
+function readBearerToken(value: string | undefined): string | undefined {
+  const match = value?.match(/^Bearer\s+(.+)$/i);
+  return match?.[1]?.trim();
 }
 
 function readInteger(value: string | undefined, fallback: number): number {

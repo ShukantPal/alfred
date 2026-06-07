@@ -52,6 +52,21 @@ export function startCtlServer(
   const meetingId = process.env.ALFRED_MEETING_ID ?? `ctl-${crypto.randomUUID().slice(0, 8)}`;
   const delegate = createTalonCompanyDelegateFromEnv(process.env);
   console.log(`[ctl] Talon delegate configured (meeting ${meetingId})`);
+  const delegateReady = delegate.ready();
+  void delegateReady
+    .then(info => {
+      console.log(
+        `[ctl] Talon delegate ready namespace=${info.namespace} agent=${info.agentName} grpc=${info.grpcEndpoint}`,
+      );
+      console.log(`[ctl] Talon UI/REST ${info.uiEndpoint}`);
+      for (const mcp of info.mcpServers) {
+        const args = mcp.args.length ? ` ${mcp.args.join(" ")}` : "";
+        console.log(`[ctl] MCP ${mcp.name} ${mcp.transport} -> ${mcp.target}${args}`);
+      }
+    })
+    .catch(error => {
+      console.error("[ctl] Talon delegate failed to start", error);
+    });
 
   // Forward live meeting transcripts to the agui Next app so the meeting-notes
   // panel can summarize them. Fed by OpenAI Realtime input transcription below.
