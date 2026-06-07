@@ -1,4 +1,10 @@
-export type { CompanyDelegate, CompanyDelegateRequest } from "./types";
+export type {
+  ActionItem,
+  ActionItemsRequest,
+  ActionItemStatus,
+  CompanyDelegate,
+  CompanyDelegateRequest,
+} from "./types";
 export {
   createTalonCompanyDelegateFromEnv,
   TalonCompanyDelegate,

@@ -29,6 +29,11 @@ export interface OpenAIRealtimeVoiceOptions {
   onAudioEnd(id: string): void;
   onAudioClear(): void;
   onStartScreenshare(): Promise<void> | void;
+  /**
+   * Generate end-of-meeting action items from the retained transcript and push
+   * them to the screenshare surface. Returns a short summary for the voice model.
+   */
+  onCreateActionItems(): Promise<{ count: number }>;
 }
 
 type ConnectionState = "idle" | "connecting" | "open" | "ready" | "closed";
@@ -93,6 +98,7 @@ export class OpenAIRealtimeVoice {
   private readonly onAudioEnd: (id: string) => void;
   private readonly onAudioClear: () => void;
   private readonly onStartScreenshare: () => Promise<void> | void;
+  private readonly onCreateActionItems: () => Promise<{ count: number }>;
   private readonly queuedAudio: string[] = [];
   private socket?: WebSocket;
   private state: ConnectionState = "idle";
@@ -101,6 +107,12 @@ export class OpenAIRealtimeVoice {
   private lastAssistantItemId?: string;
   private lastAudioStartedAt?: number;
   private suppressResponseAudio = false;
+  // Mirror of the server's response lifecycle so we never start two responses at
+  // once (which fails with conversation_already_has_active_response). Flipped
+  // synchronously when we send response.create to close the send->created gap.
+  private responseInProgress = false;
+  // A response.create requested while one was active, deferred until it finishes.
+  private pendingResponseReason?: string;
   private readonly handledFunctionCallIds = new Set<string>();
   private readonly delegateAnswersByQuestion = new Map<string, TimedDelegateAnswer>();
   private readonly delegateInFlightByQuestion = new Map<string, Promise<string>>();
@@ -133,6 +145,7 @@ export class OpenAIRealtimeVoice {
     this.onAudioEnd = options.onAudioEnd;
     this.onAudioClear = options.onAudioClear;
     this.onStartScreenshare = options.onStartScreenshare;
+    this.onCreateActionItems = options.onCreateActionItems;
   }
 
   get enabled(): boolean {
@@ -161,6 +174,8 @@ export class OpenAIRealtimeVoice {
     this.socket?.close();
     this.socket = undefined;
     this.queuedAudio.length = 0;
+    this.responseInProgress = false;
+    this.pendingResponseReason = undefined;
   }
 
   private ensureConnected(): void {
@@ -207,6 +222,10 @@ export class OpenAIRealtimeVoice {
       this.state = "idle";
       this.socket = undefined;
       this.activeAudioId = undefined;
+      // The active/queued response died with the connection; reset so a reconnect
+      // can start a fresh response instead of deferring forever.
+      this.responseInProgress = false;
+      this.pendingResponseReason = undefined;
       this.onStatus("realtime voice disconnected");
       console.log(`[ctl] OpenAI Realtime disconnected code=${event.code}`);
     });
@@ -285,6 +304,17 @@ export class OpenAIRealtimeVoice {
               additionalProperties: false,
             },
           },
+          {
+            type: "function",
+            name: "create_action_items",
+            description:
+              "Generate end-of-meeting action items from the full meeting transcript and show them on the shared screen. Call when a participant asks Alfred to create, generate, or summarize action items, to-dos, follow-ups, or next steps.",
+            parameters: {
+              type: "object",
+              properties: {},
+              additionalProperties: false,
+            },
+          },
         ],
         tool_choice: "auto",
       },
@@ -321,6 +351,7 @@ export class OpenAIRealtimeVoice {
         this.flushQueuedAudio();
         return;
       case "response.created":
+        this.responseInProgress = true;
         this.suppressResponseAudio = false;
         console.log("[ctl] realtime response created");
         return;
@@ -361,7 +392,9 @@ export class OpenAIRealtimeVoice {
           console.log("[ctl] realtime response status details", event.response.status_details);
         }
         this.endActiveAudio(event.response?.id);
+        this.responseInProgress = false;
         await this.handleFunctionCalls(event.response?.output ?? []);
+        this.flushPendingResponse();
         return;
       case "error":
         this.onStatus(`realtime error: ${event.error?.message ?? "unknown"}`);
@@ -518,6 +551,17 @@ export class OpenAIRealtimeVoice {
             error: error instanceof Error ? error.message : String(error),
           };
         }
+      case "create_action_items":
+        try {
+          const { count } = await this.onCreateActionItems();
+          console.log(`[ctl] realtime create_action_items produced ${count} items`);
+          return { status: "created", count };
+        } catch (error) {
+          return {
+            status: "failed",
+            error: error instanceof Error ? error.message : String(error),
+          };
+        }
       default:
         return {
           status: "ignored",
@@ -582,6 +626,16 @@ export class OpenAIRealtimeVoice {
   }
 
   private createAudioResponse(reason: string): void {
+    // A response is already active; queue this one and let the active response
+    // finish. Single-slot queue: the latest requested turn wins.
+    if (this.responseInProgress) {
+      console.log(`[ctl] realtime response.create deferred (busy) reason=${reason}`);
+      this.pendingResponseReason = reason;
+      return;
+    }
+    // Mark in-progress synchronously so a concurrent turn defers rather than
+    // racing the response.created event.
+    this.responseInProgress = true;
     console.log(`[ctl] realtime response.create reason=${reason}`);
     this.send({
       type: "response.create",
@@ -590,6 +644,14 @@ export class OpenAIRealtimeVoice {
         instructions: responseInstructions(reason),
       },
     });
+  }
+
+  private flushPendingResponse(): void {
+    const reason = this.pendingResponseReason;
+    if (!reason) return;
+    this.pendingResponseReason = undefined;
+    console.log(`[ctl] realtime flushing deferred response reason=${reason}`);
+    this.createAudioResponse(reason);
   }
 
   private send(payload: unknown): void {
@@ -655,6 +717,9 @@ Call delegate_to_company_agent for factual questions that need internal company 
 
 # Screenshare
 When the user asks Alfred to share the screen, show the screen, present, or start screenshare, call start_screenshare. Confirm briefly after the tool returns.
+
+# Action items
+When the user asks Alfred to create, generate, or summarize action items, to-dos, follow-ups, or next steps, call create_action_items. After the tool returns, confirm briefly how many action items were captured.
 
 # Voice Style
 Be concise, natural, and direct. Speak at a brisk conversational pace, not slowly. Answer in one sentence by default, two only when necessary. Do not add filler, throat-clearing, long acknowledgements, or tool-use preambles.

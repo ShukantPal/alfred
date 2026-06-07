@@ -1,5 +1,5 @@
 import type { Server, ServerWebSocket } from "bun";
-import { createTalonCompanyDelegateFromEnv } from "@alfred/agent";
+import { createTalonCompanyDelegateFromEnv, type ActionItem } from "@alfred/agent";
 import { extractRecallMixedAudio } from "./recall/audio";
 import { createOpenAIRealtimeVoiceFromEnv } from "./realtime/openai";
 import { createRouter } from "./routes";
@@ -69,7 +69,15 @@ export function startCtlServer(
       socket.send(serialized);
     }
   };
+  // Retain the full meeting transcript so the end-of-meeting action-item subagent
+  // has the whole conversation. Generous cap as a memory guard, not a feature limit.
+  const meetingTranscript: MeetingUtterance[] = [];
+  const MAX_TRANSCRIPT_UTTERANCES = 20_000;
   const forwardUtterance = (utterance: MeetingUtterance) => {
+    meetingTranscript.push(utterance);
+    if (meetingTranscript.length > MAX_TRANSCRIPT_UTTERANCES) {
+      meetingTranscript.splice(0, meetingTranscript.length - MAX_TRANSCRIPT_UTTERANCES);
+    }
     broadcastUtteranceToNotes(utterance);
     if (!aguiBaseUrl) {
       if (!warnedNoAgui) {
@@ -86,6 +94,26 @@ export function startCtlServer(
   const pushConfigToAgui = () => {
     if (!aguiBaseUrl || !ctlPublicBaseUrl) return;
     void postConfigToAgui(aguiBaseUrl, ctlPublicBaseUrl);
+  };
+
+  // End-of-meeting subagent: turn the retained transcript into structured action
+  // items, then push them to the agui screenshare surface for live display.
+  const createActionItems = async (): Promise<{ count: number }> => {
+    const transcript = meetingTranscript
+      .map(utterance => `${utterance.speaker}: ${utterance.text}`)
+      .join("\n");
+    if (!transcript.trim()) {
+      console.warn("[ctl] create_action_items called with an empty transcript");
+      return { count: 0 };
+    }
+    const items = await delegate.extractActionItems({ meetingId, transcript });
+    console.log(`[ctl] action-item subagent returned ${items.length} items`);
+    if (aguiBaseUrl) {
+      await postActionItemsToAgui(aguiBaseUrl, items);
+    } else {
+      console.warn("[ctl] action items generated but agui URL is not configured; cannot display");
+    }
+    return { count: items.length };
   };
 
   const speaker = { id: "meeting", displayName: "Participant" };
@@ -118,6 +146,9 @@ export function startCtlServer(
     },
     onStartScreenshare() {
       return options.onStartScreenshare?.();
+    },
+    onCreateActionItems() {
+      return createActionItems();
     },
   });
   if (realtimeVoice.enabled) {
@@ -256,6 +287,21 @@ async function postUtteranceToAgui(baseUrl: string, utterance: MeetingUtterance)
     }
   } catch (error) {
     console.warn("[ctl] agui transcript POST failed", error);
+  }
+}
+
+async function postActionItemsToAgui(baseUrl: string, items: ActionItem[]): Promise<void> {
+  try {
+    const response = await fetch(`${baseUrl}/api/meeting/tasks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ items }),
+    });
+    if (!response.ok) {
+      console.warn(`[ctl] agui tasks POST failed (${response.status})`);
+    }
+  } catch (error) {
+    console.warn("[ctl] agui tasks POST failed", error);
   }
 }
 

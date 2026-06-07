@@ -59,12 +59,18 @@ context. Redis remains the intended production memory layer via an external comp
 - `createTalonCompanyDelegateFromEnv(process.env)` creates a `CompanyDelegate`.
 - `CompanyDelegate.ready()` starts Talon, configures the namespace/agent, and attaches MCPs.
 - `CompanyDelegate.ask({ meetingId, speaker, question })` sends one delegated question to a
-  meeting-scoped Talon session and returns the answer text.
+ meeting-scoped Talon session and returns the answer text.
+- `CompanyDelegate.extractActionItems({ meetingId, transcript })` runs an end-of-meeting subagent
+ (its own `weave.op` node, `alfred.talon.actionItems`) that transforms the full meeting transcript
+ into structured `ActionItem[]` (`{ title, assignee, status }`). ctl retains the transcript and
+ calls this from the voice model's `create_action_items` tool path, then POSTs the items to agui
+ (`/api/meeting/tasks`) for live display in the screenshare "Action Items" panel.
 - `CompanyDelegate.close()` stops the local Talon node.
 
 KEY RULE: ctl decides when the voice model may respond. ctl performs wake-word/address detection
 and the Realtime model only delegates after an addressed turn. agent/ is only called from the
-voice model's `delegate_to_company_agent` tool path.
+voice model's `delegate_to_company_agent` tool path (company-memory Q&A) or the
+`create_action_items` tool path (end-of-meeting action items).
 
 ## agent/ internals
 - `agent/src/types.ts`          — delegate interface used by ctl.

@@ -269,6 +269,16 @@ VAD enabled but disables automatic model responses; it only sends
 `ALFRED_WAKE_WORD` (`alfred` by default). The model's PCM output is sent to
 `/ws/media`, where the Output Media page plays it into the meeting.
 
+Because ctl owns response creation, it must never start a second response while
+one is still running, or OpenAI rejects it with
+`conversation_already_has_active_response`. ctl tracks the response lifecycle
+(`responseInProgress` in `ctl/src/realtime/openai.ts`) and uses a queue-and-wait
+policy: if a turn (a wake-word response or a post-tool follow-up) is requested
+while a response is active, ctl stores it in a single-slot pending reason and
+fires it from the `response.done` handler once the active response finishes. The
+in-progress response is always allowed to complete rather than being cancelled,
+so Alfred is never cut off mid-answer; a rapid follow-up simply waits its turn.
+
 `agent/` is not the primary responder. ctl exposes `delegate_to_company_agent`
 to the Realtime model, and that function creates or reuses a meeting-scoped
 Talon session. Talon owns the delegated agent runtime. The delegate gets company
